@@ -295,21 +295,19 @@ impl EventBuilder {
     /// Mine PoW using single thread (fallback method)
     fn mine_pow_single_thread<T>(
         mut self,
-        supplier: &T,
+        provider: &T,
         public_key: PublicKey,
         difficulty: u8,
     ) -> UnsignedEvent
     where
-        T: TimeSupplier,
+        T: TimeProvider,
     {
         let mut nonce: u128 = 0;
 
         loop {
             nonce += 1;
 
-            let created_at: Timestamp = self
-                .custom_created_at
-                .unwrap_or_else(|| Timestamp::now_with_supplier(supplier));
+            let created_at: Timestamp = self.custom_created_at.unwrap_or_else(|| provider.now());
 
             // Check if the nonce satisfies the difficulty requirement
             if let Some(id) = self.check_nonce(&public_key, &created_at, nonce, difficulty) {
@@ -334,12 +332,12 @@ impl EventBuilder {
     #[cfg(feature = "pow-multi-thread")]
     fn mine_pow_multi_thread<T>(
         self,
-        supplier: &T,
+        provider: &T,
         public_key: PublicKey,
         difficulty: u8,
     ) -> UnsignedEvent
     where
-        T: TimeSupplier,
+        T: TimeProvider,
     {
         // Get the number of available CPU cores
         let num_threads = thread::available_parallelism()
@@ -348,7 +346,7 @@ impl EventBuilder {
 
         // Single thread fallback
         if num_threads == 1 {
-            return self.mine_pow_single_thread(supplier, public_key, difficulty);
+            return self.mine_pow_single_thread(provider, public_key, difficulty);
         }
 
         let found: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -363,9 +361,7 @@ impl EventBuilder {
 
             // Create a timestamp
             // TODO: move this into the thread loop
-            let created_at: Timestamp = self
-                .custom_created_at
-                .unwrap_or_else(|| Timestamp::now_with_supplier(supplier));
+            let created_at: Timestamp = self.custom_created_at.unwrap_or_else(|| provider.now());
 
             let handle: JoinHandle<Option<UnsignedEvent>> = thread::spawn(move || {
                 let mut nonce: u128 = thread_id as u128;
@@ -421,16 +417,16 @@ impl EventBuilder {
         }
 
         // Single thread fallback
-        self.mine_pow_single_thread(supplier, public_key, difficulty)
+        self.mine_pow_single_thread(provider, public_key, difficulty)
     }
 
     /// Build an unsigned event
     ///
     /// By default, this method removes any `p` tags that match the author's public key.
     /// To allow self-tagging, call [`EventBuilder::allow_self_tagging`] first.
-    pub fn build_with_ctx<T>(mut self, supplier: &T, public_key: PublicKey) -> UnsignedEvent
+    pub fn build_with_ctx<T>(mut self, provider: &T, public_key: PublicKey) -> UnsignedEvent
     where
-        T: TimeSupplier,
+        T: TimeProvider,
     {
         // If self-tagging isn't allowed, discard all `p` tags that match the event author.
         if !self.allow_self_tagging {
@@ -458,11 +454,11 @@ impl EventBuilder {
             Some(difficulty) if difficulty > 0 => {
                 #[cfg(not(feature = "pow-multi-thread"))]
                 {
-                    self.mine_pow_single_thread(supplier, public_key, difficulty)
+                    self.mine_pow_single_thread(provider, public_key, difficulty)
                 }
                 #[cfg(feature = "pow-multi-thread")]
                 {
-                    self.mine_pow_multi_thread(supplier, public_key, difficulty)
+                    self.mine_pow_multi_thread(provider, public_key, difficulty)
                 }
             }
             // No POW difficulty set OR difficulty == 0
@@ -470,9 +466,7 @@ impl EventBuilder {
                 let mut unsigned: UnsignedEvent = UnsignedEvent {
                     id: None,
                     pubkey: public_key,
-                    created_at: self
-                        .custom_created_at
-                        .unwrap_or_else(|| Timestamp::now_with_supplier(supplier)),
+                    created_at: self.custom_created_at.unwrap_or_else(|| provider.now()),
                     kind: self.kind,
                     tags: self.tags,
                     content: self.content,
@@ -490,7 +484,7 @@ impl EventBuilder {
     #[inline]
     #[cfg(feature = "std")]
     pub fn build(self, pubkey: PublicKey) -> UnsignedEvent {
-        self.build_with_ctx(&Instant::now(), pubkey)
+        self.build_with_ctx(&SystemTime::now(), pubkey)
     }
 
     /// Build, sign and return [`Event`]
@@ -514,7 +508,7 @@ impl EventBuilder {
     #[inline]
     #[cfg(feature = "std")]
     pub fn sign_with_keys(self, keys: &Keys) -> Result<Event, Error> {
-        self.sign_with_ctx(SECP256K1, &mut OsRng, &Instant::now(), keys)
+        self.sign_with_ctx(SECP256K1, &mut OsRng, &SystemTime::now(), keys)
     }
 
     /// Build, sign and return [`Event`] using [`Keys`] signer
@@ -524,17 +518,17 @@ impl EventBuilder {
         self,
         secp: &Secp256k1<C>,
         rng: &mut R,
-        supplier: &T,
+        provider: &T,
         keys: &Keys,
     ) -> Result<Event, Error>
     where
         C: Signing + Verification,
         R: Rng + CryptoRng,
-        T: TimeSupplier,
+        T: TimeProvider,
     {
         let pubkey: PublicKey = keys.public_key();
         Ok(self
-            .build_with_ctx(supplier, pubkey)
+            .build_with_ctx(provider, pubkey)
             .sign_with_ctx(secp, rng, keys)?)
     }
 
@@ -1500,9 +1494,12 @@ impl EventBuilder {
         // Push received public key
         tags.push(Tag::public_key(*receiver));
 
+        let mut created_at = Timestamp::now();
+        created_at.tweak(nip59::RANGE_RANDOM_TIMESTAMP_TWEAK);
+
         Self::new(Kind::GiftWrap, content)
             .tags(tags)
-            .custom_created_at(Timestamp::tweaked(nip59::RANGE_RANDOM_TIMESTAMP_TWEAK))
+            .custom_created_at(created_at)
             .sign_with_keys(&keys)
     }
 

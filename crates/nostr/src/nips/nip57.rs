@@ -26,8 +26,8 @@ use super::nip01::Coordinate;
 use crate::event::builder::Error as BuilderError;
 use crate::key::Error as KeyError;
 #[cfg(feature = "std")]
-use crate::types::time::Instant;
-use crate::types::time::TimeSupplier;
+use crate::types::time::SystemTime;
+use crate::types::time::TimeProvider;
 #[cfg(feature = "std")]
 use crate::SECP256K1;
 use crate::{
@@ -265,23 +265,23 @@ pub fn anonymous_zap_request(data: ZapRequestData) -> Result<Event, Error> {
 #[inline]
 #[cfg(feature = "std")]
 pub fn private_zap_request(data: ZapRequestData, keys: &Keys) -> Result<Event, Error> {
-    private_zap_request_with_ctx(SECP256K1, &mut OsRng, &Instant::now(), data, keys)
+    private_zap_request_with_ctx(SECP256K1, &mut OsRng, &SystemTime::now(), data, keys)
 }
 
 /// Create **private** zap request
 pub fn private_zap_request_with_ctx<C, R, T>(
     secp: &Secp256k1<C>,
     rng: &mut R,
-    supplier: &T,
+    provider: &T,
     data: ZapRequestData,
     keys: &Keys,
 ) -> Result<Event, Error>
 where
     C: Signing + Verification,
     R: RngCore + CryptoRng,
-    T: TimeSupplier,
+    T: TimeProvider,
 {
-    let created_at: Timestamp = Timestamp::now_with_supplier(supplier);
+    let created_at: Timestamp = provider.now();
 
     // Create encryption key
     let secret_key: SecretKey =
@@ -294,7 +294,7 @@ where
     }
     let msg: String = EventBuilder::new(Kind::ZapPrivateMessage, &data.message)
         .tags(tags)
-        .sign_with_ctx(secp, rng, supplier, keys)?
+        .sign_with_ctx(secp, rng, provider, keys)?
         .as_json();
     let msg: String = encrypt_private_zap_message(rng, &secret_key, &data.public_key, msg)?;
 
@@ -307,7 +307,7 @@ where
     Ok(EventBuilder::new(Kind::ZapRequest, "")
         .tags(tags)
         .custom_created_at(created_at)
-        .sign_with_ctx(secp, rng, supplier, &private_zap_keys)?)
+        .sign_with_ctx(secp, rng, provider, &private_zap_keys)?)
 }
 
 /// Create NIP57 encryption key for **private** zap

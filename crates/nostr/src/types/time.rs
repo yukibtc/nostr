@@ -5,21 +5,27 @@
 //! Time
 
 use alloc::string::{String, ToString};
-use core::fmt;
+use core::any::Any;
+use core::fmt::{self, Debug};
 use core::num::{ParseIntError, TryFromIntError};
 use core::ops::{Add, Range, Sub};
 use core::str::{self, FromStr};
 use core::time::Duration;
+#[cfg(all(
+    feature = "std",
+    not(all(target_arch = "wasm32", target_os = "unknown"))
+))]
+pub use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use instant::SystemTime;
 #[cfg(feature = "std")]
 use secp256k1::rand::rngs::OsRng;
 use secp256k1::rand::Rng;
 
-mod supplier;
-
-pub use self::supplier::TimeSupplier;
-#[cfg(feature = "std")]
-pub use self::supplier::{Instant, SystemTime, UNIX_EPOCH};
+/// Unix epoch
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub const UNIX_EPOCH: SystemTime = SystemTime::UNIX_EPOCH;
 
 // 2000-03-01 (mod 400 year, immediately after feb29)
 const LEAPOCH: i64 = 11017;
@@ -31,6 +37,23 @@ const TO_HUMAN_DATE_BUF: [u8; 20] = [
     b'0', b'0', b'0', b'0', b'-', b'0', b'0', b'-', b'0', b'0', b'T', b'0', b'0', b':', b'0', b'0',
     b':', b'0', b'0', b'Z',
 ];
+
+/// Time provider
+pub trait TimeProvider: Any + Debug + Send + Sync {
+    /// Get the current UNIX timestamp.
+    fn now(&self) -> Timestamp;
+}
+
+#[cfg(feature = "std")]
+impl TimeProvider for SystemTime {
+    fn now(&self) -> Timestamp {
+        let ts: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Timestamp::from_secs(ts)
+    }
+}
 
 /// Unix timestamp in seconds
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -64,45 +87,8 @@ impl Timestamp {
     /// Get UNIX timestamp
     #[cfg(feature = "std")]
     pub fn now() -> Self {
-        let ts: u64 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        Self::from_secs(ts)
-    }
-
-    /// Get UNIX timestamp from a specified [`TimeSupplier`]
-    pub fn now_with_supplier<T>(supplier: &T) -> Self
-    where
-        T: TimeSupplier,
-    {
-        let now = supplier.now();
-        let starting_point = supplier.starting_point();
-        let duration = supplier.elapsed_since(now, starting_point);
-        supplier.to_timestamp(duration)
-    }
-
-    /// Get tweaked UNIX timestamp
-    ///
-    /// Remove a random number of seconds from now
-    #[cfg(feature = "std")]
-    pub fn tweaked(range: Range<u64>) -> Self {
-        let mut now: Timestamp = Self::now();
-        now.tweak(range);
-        now
-    }
-
-    /// Get tweaked UNIX timestamp
-    ///
-    /// Remove a random number of seconds from now
-    pub fn tweaked_with_supplier_and_rng<T, R>(supplier: &T, rng: &mut R, range: Range<u64>) -> Self
-    where
-        T: TimeSupplier,
-        R: Rng,
-    {
-        let mut now: Timestamp = Self::now_with_supplier(supplier);
-        now.tweak_with_rng(rng, range);
-        now
+        let time: SystemTime = SystemTime::now();
+        time.now()
     }
 
     /// Remove a random number of seconds from [`Timestamp`]

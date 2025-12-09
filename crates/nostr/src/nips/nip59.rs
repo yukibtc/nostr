@@ -159,9 +159,11 @@ where
         .nip44_encrypt(receiver_pubkey, &rumor.as_json())
         .await?;
 
+    let mut created_at: Timestamp = Timestamp::now();
+    created_at.tweak(RANGE_RANDOM_TIMESTAMP_TWEAK);
+
     // Compose builder
-    Ok(EventBuilder::new(Kind::Seal, content)
-        .custom_created_at(Timestamp::tweaked(RANGE_RANDOM_TIMESTAMP_TWEAK)))
+    Ok(EventBuilder::new(Kind::Seal, content).custom_created_at(created_at))
 }
 
 #[cfg(feature = "std")]
