@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
+use std::future::IntoFuture;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -42,7 +43,7 @@ pub use self::stats::RelayConnectionStats;
 pub use self::status::RelayStatus;
 use crate::policy::AdmitStatus;
 use crate::shared::SharedState;
-use crate::stream::BoxedStream;
+use crate::stream::{BoxedStream, EventStreamRequest};
 use crate::transport::websocket::{WebSocketSink, WebSocketStream};
 
 /// Subscription auto-closed reason
@@ -625,6 +626,14 @@ impl Relay {
     }
 
     /// Stream events from relay
+    pub fn stream<F>(&self, filters: F) -> EventStreamRequest<Self, Vec<Filter>>
+    where
+        F: Into<Vec<Filter>>,
+    {
+        EventStreamRequest::new(self, filters.into())
+    }
+
+    /// Stream events from relay
     pub async fn stream_events<F>(
         &self,
         filters: F,
@@ -634,20 +643,7 @@ impl Relay {
     where
         F: Into<Vec<Filter>>,
     {
-        // Create channels
-        let (tx, rx) = mpsc::channel(512);
-
-        // Compose auto-closing options
-        let opts: SubscribeAutoCloseOptions = SubscribeAutoCloseOptions::default()
-            .exit_policy(policy)
-            .timeout(Some(timeout));
-
-        // Subscribe
-        let id: SubscriptionId = SubscriptionId::generate();
-        self.subscribe_auto_closing(id, filters.into(), opts, Some(tx))
-            .await?;
-
-        Ok(Box::pin(SubscriptionActivityEventStream::new(rx)))
+        self.stream(filters).timeout(timeout).policy(policy).await
     }
 
     /// Fetch events
@@ -786,6 +782,34 @@ impl Relay {
             }
         }
         Ok(())
+    }
+}
+
+impl<'a> EventStreamRequest<'a, Relay, Vec<Filter>> {
+    pub(super) async fn exec(self) -> Result<BoxedStream<Result<Event, Error>>, Error> {
+        // Create channels
+        let (tx, rx) = mpsc::channel(512);
+
+        // Compose auto-closing options
+        let opts: SubscribeAutoCloseOptions = SubscribeAutoCloseOptions::default()
+            .exit_policy(self.policy)
+            .timeout(Some(self.timeout));
+        
+        // Subscribe
+        let id: SubscriptionId = SubscriptionId::generate();
+        self.obj.subscribe_auto_closing(id, self.filters, opts, Some(tx))
+            .await?;
+
+        Ok(Box::pin(SubscriptionActivityEventStream::new(rx)))
+    }
+}
+
+impl<'a> IntoFuture for EventStreamRequest<'a, Relay, Vec<Filter>> {
+    type Output = Result<BoxedStream<Result<Event, Error>>, Error>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.exec())
     }
 }
 

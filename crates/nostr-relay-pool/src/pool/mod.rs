@@ -5,7 +5,7 @@
 //! Relay Pool
 
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::iter::Zip;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -36,7 +36,7 @@ use crate::relay::flags::FlagCheck;
 use crate::relay::options::{RelayOptions, ReqExitPolicy, SyncOptions};
 use crate::relay::Relay;
 use crate::shared::SharedState;
-use crate::stream::{BoxedStream, ReceiverStream};
+use crate::stream::{BoxedStream, EventStreamRequest, ReceiverStream};
 use crate::{Reconciliation, RelayServiceFlags, SubscribeOptions};
 
 /// Relay Pool Notification
@@ -1180,6 +1180,13 @@ impl RelayPool {
         Ok(events)
     }
 
+    pub fn stream<F>(&self, filters: F) -> EventStreamRequest<Self, HashMap<RelayUrl, Vec<Filter>>>
+    where
+        F: Into<HashMap<RelayUrl, Vec<Filter>>>,
+    {
+        EventStreamRequest::new(self, filters.into())
+    }
+
     /// Stream events from relays with `READ` flag.
     pub async fn stream_events<F>(
         &self,
@@ -1235,13 +1242,60 @@ impl RelayPool {
             .map(|(u, v)| Ok((u.try_into_url()?, v.into())))
             .collect::<Result<_, Error>>()?;
 
+        self.stream(targets).timeout(timeout).policy(policy).await
+    }
+
+    /// Handle notifications
+    pub async fn handle_notifications<F, Fut>(&self, func: F) -> Result<(), Error>
+    where
+        F: Fn(RelayPoolNotification) -> Fut,
+        Fut: Future<Output = Result<bool>>,
+    {
+        let mut notifications = self.notifications();
+        while let Ok(notification) = notifications.recv().await {
+            let shutdown: bool = RelayPoolNotification::Shutdown == notification;
+            let exit: bool = func(notification)
+                .await
+                .map_err(|e| Error::Handler(e.to_string()))?;
+            if exit || shutdown {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Return `true` if the relay can be removed
+///
+/// If it CAN'T be removed,
+/// the flags are automatically updated (remove `READ`, `WRITE` and `DISCOVERY` flags).
+fn can_remove_relay(relay: &Relay) -> bool {
+    let flags = relay.flags();
+    if flags.has_any(RelayServiceFlags::GOSSIP) {
+        // Remove READ, WRITE and DISCOVERY flags
+        flags.remove(
+            RelayServiceFlags::READ | RelayServiceFlags::WRITE | RelayServiceFlags::DISCOVERY,
+        );
+
+        // Relay has `GOSSIP` flag so it can't be removed.
+        return false;
+    }
+
+    // Relay can be removed
+    true
+}
+
+impl<'a> EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
+    async fn exec(self) -> Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error> {
+        let targets = self.filters;
+
         // Check if `targets` map is empty
         if targets.is_empty() {
             return Err(Error::NoRelaysSpecified);
         }
 
         // Lock with read shared access
-        let relays = self.inner.atomic.relays.read().await;
+        let relays = self.obj.inner.atomic.relays.read().await;
 
         // Check if empty
         if relays.is_empty() {
@@ -1255,15 +1309,15 @@ impl RelayPool {
         let mut urls = Vec::with_capacity(targets.len());
         let mut futures = Vec::with_capacity(targets.len());
 
-        for (url, filter) in targets.into_iter() {
+        for (url, filter) in targets {
             // Try to get the relay
-            let relay: &Relay = self.internal_relay(&relays, &url)?;
+            let relay: &Relay = self.obj.internal_relay(&relays, &url)?;
 
             // Push url
             urls.push(url);
 
             // Push stream events future
-            futures.push(relay.stream_events(filter, timeout, policy));
+            futures.push(relay.stream(filter).timeout(self.timeout).policy(self.policy).exec());
         }
 
         // Wait that futures complete
@@ -1342,45 +1396,15 @@ impl RelayPool {
         // Return stream
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
-
-    /// Handle notifications
-    pub async fn handle_notifications<F, Fut>(&self, func: F) -> Result<(), Error>
-    where
-        F: Fn(RelayPoolNotification) -> Fut,
-        Fut: Future<Output = Result<bool>>,
-    {
-        let mut notifications = self.notifications();
-        while let Ok(notification) = notifications.recv().await {
-            let shutdown: bool = RelayPoolNotification::Shutdown == notification;
-            let exit: bool = func(notification)
-                .await
-                .map_err(|e| Error::Handler(e.to_string()))?;
-            if exit || shutdown {
-                break;
-            }
-        }
-        Ok(())
-    }
 }
 
-/// Return `true` if the relay can be removed
-///
-/// If it CAN'T be removed,
-/// the flags are automatically updated (remove `READ`, `WRITE` and `DISCOVERY` flags).
-fn can_remove_relay(relay: &Relay) -> bool {
-    let flags = relay.flags();
-    if flags.has_any(RelayServiceFlags::GOSSIP) {
-        // Remove READ, WRITE and DISCOVERY flags
-        flags.remove(
-            RelayServiceFlags::READ | RelayServiceFlags::WRITE | RelayServiceFlags::DISCOVERY,
-        );
+impl<'a> IntoFuture for EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
+    type Output = Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
-        // Relay has `GOSSIP` flag so it can't be removed.
-        return false;
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.exec())
     }
-
-    // Relay can be removed
-    true
 }
 
 #[cfg(test)]

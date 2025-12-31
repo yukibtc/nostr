@@ -6,9 +6,12 @@
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_utility::futures_util::Stream;
 use tokio::sync::mpsc::Receiver;
+
+use crate::relay::ReqExitPolicy;
 
 /// Boxed stream
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,5 +37,40 @@ impl<T> Stream for ReceiverStream<T> {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.poll_recv(cx)
+    }
+}
+
+/// Event stream request
+#[derive(Debug)]
+#[must_use = "does nothing unless you `.await`!"]
+pub struct EventStreamRequest<'a, T, F> {
+    pub(crate) obj: &'a T,
+    pub(crate) filters: F,
+    pub(crate) timeout: Duration,
+    pub(crate) policy: ReqExitPolicy,
+}
+
+impl <'a, T, F> EventStreamRequest<'a, T, F> {
+    pub(crate) fn new(obj: &'a T, filters: F) -> Self {
+        Self {
+            obj,
+            filters,
+            timeout: Duration::from_secs(60),
+            policy: ReqExitPolicy::default()
+        }
+    }
+
+    /// Set a timeout (default: 60 sec).
+    #[inline]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Set request exit policy (default: [`ReqExitPolicy::ExitOnEOSE`]).
+    #[inline]
+    pub fn policy(mut self, policy: ReqExitPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 }
