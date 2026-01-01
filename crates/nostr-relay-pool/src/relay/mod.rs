@@ -43,7 +43,7 @@ pub use self::stats::RelayConnectionStats;
 pub use self::status::RelayStatus;
 use crate::policy::AdmitStatus;
 use crate::shared::SharedState;
-use crate::stream::{BoxedStream, EventStreamRequest};
+use crate::stream::{BoxedStream, EventStreamRequest, EventStreamTarget};
 use crate::transport::websocket::{WebSocketSink, WebSocketStream};
 
 /// Subscription auto-closed reason
@@ -561,6 +561,11 @@ impl Relay {
         opts: SubscribeAutoCloseOptions,
         activity: Option<mpsc::Sender<SubscriptionActivity>>,
     ) -> Result<(), Error> {
+        // Check if there are filters
+        if filters.is_empty() {
+            return Err(Error::EmptyFilters);
+        }
+
         // Compose REQ message
         let msg: ClientMessage = ClientMessage::Req {
             subscription_id: Cow::Borrowed(&id),
@@ -597,6 +602,11 @@ impl Relay {
         id: SubscriptionId,
         filters: Vec<Filter>,
     ) -> Result<(), Error> {
+        // Check if there are filters
+        if filters.is_empty() {
+            return Err(Error::EmptyFilters);
+        }
+
         // Compose REQ message
         let msg: ClientMessage = ClientMessage::Req {
             subscription_id: Cow::Borrowed(&id),
@@ -625,25 +635,14 @@ impl Relay {
         self.inner.unsubscribe_all().await
     }
 
-    /// Stream events from relay
-    pub fn stream<F>(&self, filters: F) -> EventStreamRequest<Self, Vec<Filter>>
+    /// Create a stream request for getting events from relay
+    #[inline]
+    pub fn stream_events<F>(&self, filters: F) -> EventStreamRequest<Self>
     where
         F: Into<Vec<Filter>>,
     {
-        EventStreamRequest::new(self, filters.into())
-    }
-
-    /// Stream events from relay
-    pub async fn stream_events<F>(
-        &self,
-        filters: F,
-        timeout: Duration,
-        policy: ReqExitPolicy,
-    ) -> Result<BoxedStream<Result<Event, Error>>, Error>
-    where
-        F: Into<Vec<Filter>>,
-    {
-        self.stream(filters).timeout(timeout).policy(policy).await
+        let filters: Vec<Filter> = filters.into();
+        EventStreamRequest::new(self, filters)
     }
 
     /// Fetch events
@@ -669,7 +668,7 @@ impl Relay {
         };
 
         // Stream events
-        let mut stream = self.stream_events(filters, timeout, policy).await?;
+        let mut stream = self.stream_events(filters).timeout(timeout).policy(policy).await?;
 
         while let Some(res) = stream.next().await {
             // Get event from the result
@@ -785,7 +784,7 @@ impl Relay {
     }
 }
 
-impl<'a> EventStreamRequest<'a, Relay, Vec<Filter>> {
+impl<'a> EventStreamRequest<'a, Relay> {
     pub(super) async fn exec(self) -> Result<BoxedStream<Result<Event, Error>>, Error> {
         // Create channels
         let (tx, rx) = mpsc::channel(512);
@@ -794,17 +793,23 @@ impl<'a> EventStreamRequest<'a, Relay, Vec<Filter>> {
         let opts: SubscribeAutoCloseOptions = SubscribeAutoCloseOptions::default()
             .exit_policy(self.policy)
             .timeout(Some(self.timeout));
-        
+
+        // Get filters
+        let filters: Vec<Filter> = match self.target {
+            EventStreamTarget::Broadcast(filters) => filters,
+            EventStreamTarget::Targeted(_) => unreachable!(),
+        };
+
         // Subscribe
         let id: SubscriptionId = SubscriptionId::generate();
-        self.obj.subscribe_auto_closing(id, self.filters, opts, Some(tx))
+        self.obj.subscribe_auto_closing(id, filters, opts, Some(tx))
             .await?;
 
         Ok(Box::pin(SubscriptionActivityEventStream::new(rx)))
     }
 }
 
-impl<'a> IntoFuture for EventStreamRequest<'a, Relay, Vec<Filter>> {
+impl<'a> IntoFuture for EventStreamRequest<'a, Relay> {
     type Output = Result<BoxedStream<Result<Event, Error>>, Error>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 

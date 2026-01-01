@@ -5,8 +5,9 @@
 //! Client
 
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::iter;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -859,30 +860,19 @@ impl Client {
     ///
     /// If `gossip` is enabled the events will be streamed also from
     /// NIP65 relays (automatically discovered) of public keys included in filters (if any).
-    pub async fn stream_events<F>(
+    pub fn stream_events<T>(
         &self,
-        filters: F,
-        timeout: Duration,
-    ) -> Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error>
+        target: T,
+    ) -> Result<EventStreamRequest<'_, RelayPool>, Error>
     where
-        F: Into<Vec<Filter>>,
+        T: Into<EventStreamTarget>,
     {
         match &self.gossip {
             Some(gossip) => {
-                self.gossip_stream_events(gossip, filters, timeout, ReqExitPolicy::ExitOnEOSE)
-                    .await
+                self.gossip_stream_events(gossip, target)
             }
             None => {
-                let stream = self
-                    .pool
-                    .stream_events(filters, timeout, ReqExitPolicy::ExitOnEOSE)
-                    .await?;
-
-                // Map stream to change the error type
-                let stream = stream.map(|(u, r)| (u, r.map_err(Error::from)));
-
-                // Box the stream
-                Ok(Box::pin(stream))
+                Ok(self.pool.stream_events(target))
             }
         }
     }
@@ -1861,29 +1851,19 @@ impl Client {
         Ok(self.pool.send_event_to(urls, event).await?)
     }
 
-    async fn gossip_stream_events<F>(
+    fn gossip_stream_events<F>(
         &self,
         gossip: &GossipWrapper,
         filters: F,
-        timeout: Duration,
-        policy: ReqExitPolicy,
-    ) -> Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error>
+    ) -> Result<EventStreamRequest<'_, RelayPool>, Error>
     where
         F: Into<Vec<Filter>>,
     {
-        let filters = self.break_down_filters(gossip, filters).await?;
-
-        // Stream events
-        let stream = self
+        let targets = self.break_down_filters(gossip, filters).await?;
+        
+        Ok(self
             .pool
-            .stream_events_targeted(filters, timeout, policy)
-            .await?;
-
-        // Map stream to change the error type
-        let stream = stream.map(|(u, r)| (u, r.map_err(Error::from)));
-
-        // Box the stream
-        Ok(Box::pin(stream))
+            .stream_events(targets))
     }
 
     async fn gossip_fetch_events<F>(

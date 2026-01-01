@@ -119,6 +119,8 @@ pub enum Error {
         /// Current
         current: Duration,
     },
+    /// Empty filters
+    EmptyFilters,
     /// Auth failed
     AuthenticationFailed,
     /// Premature exit
@@ -188,6 +190,7 @@ impl fmt::Display for Error {
                 max.as_millis(),
                 current.as_millis()
             ),
+            Self::EmptyFilters => f.write_str("empty filters"),
             Self::AuthenticationFailed => f.write_str("authentication failed"),
             Self::PrematureExit => f.write_str("premature exit"),
         }

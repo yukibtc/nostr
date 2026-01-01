@@ -4,12 +4,15 @@
 
 //! Stream
 
+use std::collections::HashMap;
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_utility::futures_util::Stream;
 use tokio::sync::mpsc::Receiver;
+use nostr::{Filter, RelayUrl};
 
 use crate::relay::ReqExitPolicy;
 
@@ -40,21 +43,50 @@ impl<T> Stream for ReceiverStream<T> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum EventStreamTarget {
+    /// Broadcast to all relays
+    Broadcast(Vec<Filter>),
+    /// Send to specific relays
+    Targeted(HashMap<RelayUrl, Vec<Filter>>),
+}
+
+impl From<Filter> for EventStreamTarget {
+    fn from(filter: Filter) -> Self {
+        Self::Broadcast(vec![filter])
+    }
+}
+
+impl From<Vec<Filter>> for EventStreamTarget {
+    fn from(filters: Vec<Filter>) -> Self {
+        Self::Broadcast(filters)
+    }
+}
+
+impl From<HashMap<RelayUrl, Vec<Filter>>> for EventStreamTarget {
+    fn from(targets: HashMap<RelayUrl, Vec<Filter>>) -> Self {
+        Self::Targeted(targets)
+    }
+}
+
 /// Event stream request
-#[derive(Debug)]
 #[must_use = "does nothing unless you `.await`!"]
-pub struct EventStreamRequest<'a, T, F> {
+pub struct EventStreamRequest<'a, T> {
     pub(crate) obj: &'a T,
-    pub(crate) filters: F,
+    pub(crate) preexec: Option<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + 'a>>,
+    pub(crate) target: EventStreamTarget,
     pub(crate) timeout: Duration,
     pub(crate) policy: ReqExitPolicy,
 }
 
-impl <'a, T, F> EventStreamRequest<'a, T, F> {
-    pub(crate) fn new(obj: &'a T, filters: F) -> Self {
+impl <'a, T> EventStreamRequest<'a, T> {
+    pub(crate) fn new<F>(obj: &'a T, target: F) -> Self
+    where
+        F: Into<EventStreamTarget>,
+    {
         Self {
             obj,
-            filters,
+            target: target.into(),
             timeout: Duration::from_secs(60),
             policy: ReqExitPolicy::default()
         }

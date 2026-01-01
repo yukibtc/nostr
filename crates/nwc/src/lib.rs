@@ -140,7 +140,7 @@ impl NostrWalletConnect {
         // Subscribe to filter and create the stream
         let mut stream = self
             .pool
-            .stream_events(filter, self.timeout, ReqExitPolicy::WaitForEvents(1))
+            .stream_events(filter).timeout(self.timeout).policy(ReqExitPolicy::WaitForEvents(1))
             .await?;
 
         // Send the request

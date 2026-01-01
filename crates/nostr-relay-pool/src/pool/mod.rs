@@ -36,7 +36,7 @@ use crate::relay::flags::FlagCheck;
 use crate::relay::options::{RelayOptions, ReqExitPolicy, SyncOptions};
 use crate::relay::Relay;
 use crate::shared::SharedState;
-use crate::stream::{BoxedStream, EventStreamRequest, ReceiverStream};
+use crate::stream::{BoxedStream, EventStreamRequest, EventStreamTarget, ReceiverStream};
 use crate::{Reconciliation, RelayServiceFlags, SubscribeOptions};
 
 /// Relay Pool Notification
@@ -1149,6 +1149,11 @@ impl RelayPool {
         // Convert filters
         let filters: Vec<Filter> = filters.into();
 
+        let targets: HashMap<RelayUrl, Vec<Filter>> = urls
+            .into_iter()
+            .map(|u| Ok((u.try_into_url()?, filters.clone())))
+            .collect::<Result<_, Error>>()?;
+
         // Construct a new events collection
         let mut events: Events = if filters.len() == 1 {
             // SAFETY: this can't panic because the filters are already verified that list isn't empty.
@@ -1161,8 +1166,9 @@ impl RelayPool {
 
         // Stream events
         let mut stream = self
-            .stream_events_from(urls, filters, timeout, policy)
+            .stream_events(targets).timeout(timeout).policy(policy)
             .await?;
+        
         while let Some((url, result)) = stream.next().await {
             // NOTE: not propagate the error here! A single error by any of the relays would stop the entire fetching process.
             match result {
@@ -1180,29 +1186,37 @@ impl RelayPool {
         Ok(events)
     }
 
-    pub fn stream<F>(&self, filters: F) -> EventStreamRequest<Self, HashMap<RelayUrl, Vec<Filter>>>
+    /// Stream events according to the specified [`EventStreamTarget`].
+    /// 
+    /// # Example
+    /// 
+    /// ```rust
+    /// # use std::time::Duration;
+    /// # use nostr_relay_pool::prelude::*;
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pool = RelayPool::new();
+    /// let filter = Filter::new().kind(Kind::Metadata).limit(10);
+    /// let mut stream = pool.stream_events(filter).timeout(Duration::from_secs(10)).await?;
+    ///
+    /// while let Some((url, result)) = stream.next().await {
+    ///     match result {
+    ///         Ok(event) => println!("Received event from relay {}", url),
+    ///         Err(e) => println!("Failed to handle streamed event from relay {}", url),
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline]
+    pub fn stream_events<F>(&self, target: F) -> EventStreamRequest<Self>
     where
-        F: Into<HashMap<RelayUrl, Vec<Filter>>>,
+        F: Into<EventStreamTarget>,
     {
-        EventStreamRequest::new(self, filters.into())
-    }
-
-    /// Stream events from relays with `READ` flag.
-    pub async fn stream_events<F>(
-        &self,
-        filters: F,
-        timeout: Duration,
-        policy: ReqExitPolicy,
-    ) -> Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error>
-    where
-        F: Into<Vec<Filter>>,
-    {
-        let urls: Vec<RelayUrl> = self.__read_relay_urls().await;
-        self.stream_events_from(urls, filters, timeout, policy)
-            .await
+        EventStreamRequest::new(self, target)
     }
 
     /// Stream events from specific relays
+    #[deprecated(since = "0.45.0", note = "Use `stream_events` instead")]
     pub async fn stream_events_from<I, U, F>(
         &self,
         urls: I,
@@ -1218,12 +1232,14 @@ impl RelayPool {
     {
         let filters: Vec<Filter> = filters.into();
         let targets = urls.into_iter().map(|u| (u, filters.clone()));
+        #[allow(deprecated)]
         self.stream_events_targeted(targets, timeout, policy).await
     }
 
     /// Targeted streaming events
     ///
     /// Stream events from specific relays with specific filters
+    #[deprecated(since = "0.45.0", note = "Use `stream_events` instead")]
     pub async fn stream_events_targeted<I, U, F>(
         &self,
         targets: I,
@@ -1242,7 +1258,7 @@ impl RelayPool {
             .map(|(u, v)| Ok((u.try_into_url()?, v.into())))
             .collect::<Result<_, Error>>()?;
 
-        self.stream(targets).timeout(timeout).policy(policy).await
+        self.stream_events(targets).timeout(timeout).policy(policy).await
     }
 
     /// Handle notifications
@@ -1285,11 +1301,18 @@ fn can_remove_relay(relay: &Relay) -> bool {
     true
 }
 
-impl<'a> EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
+impl<'a> EventStreamRequest<'a, RelayPool> {
     async fn exec(self) -> Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error> {
-        let targets = self.filters;
+        // Construct targets
+        let targets: HashMap<RelayUrl, Vec<Filter>> = match self.target {
+            EventStreamTarget::Broadcast(filters) => {
+                let urls: Vec<RelayUrl> = self.obj.__read_relay_urls().await;
+                urls.into_iter().map(|u| (u, filters.clone())).collect()
+            }
+            EventStreamTarget::Targeted(targets) => targets,
+        };
 
-        // Check if `targets` map is empty
+        // Check if the map is empty
         if targets.is_empty() {
             return Err(Error::NoRelaysSpecified);
         }
@@ -1317,7 +1340,7 @@ impl<'a> EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
             urls.push(url);
 
             // Push stream events future
-            futures.push(relay.stream(filter).timeout(self.timeout).policy(self.policy).exec());
+            futures.push(relay.stream_events(filter).timeout(self.timeout).policy(self.policy).exec());
         }
 
         // Wait that futures complete
@@ -1398,7 +1421,7 @@ impl<'a> EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
     }
 }
 
-impl<'a> IntoFuture for EventStreamRequest<'a, RelayPool, HashMap<RelayUrl, Vec<Filter>>> {
+impl<'a> IntoFuture for EventStreamRequest<'a, RelayPool> {
     type Output = Result<BoxedStream<(RelayUrl, Result<Event, Error>)>, Error>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
