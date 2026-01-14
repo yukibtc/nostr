@@ -17,7 +17,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
-tor = ["async-wsocket/tor-launch-service"]
+tor = ["async-wsocket/tor-launch-service", "nostr-sdk/tor"]
 
 [dependencies]
 async-utility.workspace = true
