@@ -20,7 +20,8 @@ use serde_json::Value;
 use super::nip19::{self, FromBech32, Nip19Coordinate, ToBech32};
 use super::nip21::{FromNostrUri, ToNostrUri};
 use crate::types::Url;
-use crate::{key, Filter, JsonUtil, Kind, PublicKey, Tag};
+use crate::{key, EventId, Filter, JsonUtil, Kind, PublicKey, RelayUrl, Tag};
+use crate::prelude::Marker;
 
 /// Raw Event error
 #[derive(Debug, PartialEq)]
@@ -493,6 +494,51 @@ where
     }
 
     deserializer.deserialize_map(GenericTagsVisitor)
+}
+
+/// Standard NIP-01 tags
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TagStandardNip01 {
+    /// Event
+    ///
+    /// `["e", <32-bytes lowercase hex of the id of another event>, <recommended relay URL, optional>, <32-bytes lowercase hex of the author's pubkey, optional>]`
+    Event {
+        /// Event ID
+        id: EventId,
+        /// Recommended relay URL
+        relay_url: Option<RelayUrl>,
+        /// Should be the public key of the author of the referenced event
+        public_key: Option<PublicKey>,
+    },
+    /// Public Key
+    ///
+    /// `["p", <32-bytes lowercase hex of a pubkey>, <recommended relay URL, optional>]`
+    PublicKey {
+        /// Public key
+        public_key: PublicKey,
+        /// Recommended relay URL
+        relay_url: Option<RelayUrl>,
+    },
+    /// Coordinate
+    ///
+    /// ["a", "<kind integer>:<32-bytes lowercase hex of a pubkey>:<d tag value>", <recommended relay URL, optional>]
+    Coordinate {
+        /// Coordinate
+        coordinate: Coordinate,
+        /// Recommended relay URL
+        relay_url: Option<RelayUrl>,
+    },
+}
+
+impl TagStandardNip01 {
+    /// Parse tag from slice of string
+    #[inline]
+    pub fn parse<S>(tag: &[S]) -> Result<Self, Error>
+    where
+        S: AsRef<str>,
+    {
+        todo!()
+    }
 }
 
 #[cfg(test)]

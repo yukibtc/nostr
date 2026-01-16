@@ -33,3 +33,30 @@ impl Contact {
         }
     }
 }
+
+/// Standard NIP-02 tags
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TagStandardNip02 {
+    /// Contact public key
+    ///
+    /// `["p", <32-bytes hex key>, <main relay URL>, <petname>]`
+    PublicKey {
+        /// Public key
+        public_key: PublicKey,
+        /// Recommended relay URL
+        relay_url: Option<RelayUrl>,
+        /// Alias
+        alias: Option<String>,
+    },
+}
+
+impl TagStandardNip02 {
+    /// Parse tag from slice of string
+    #[inline]
+    pub fn parse<S>(tag: &[S]) -> Result<Self, Error>
+    where
+        S: AsRef<str>,
+    {
+        todo!()
+    }
+}

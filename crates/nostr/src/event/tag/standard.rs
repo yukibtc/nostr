@@ -15,7 +15,7 @@ use secp256k1::schnorr::Signature;
 
 use super::{Error, TagKind};
 use crate::event::id::EventId;
-use crate::nips::nip01::Coordinate;
+use crate::nips::nip01::{Coordinate, TagStandardNip01};
 use crate::nips::nip10::Marker;
 use crate::nips::nip34::EUC;
 use crate::nips::nip39::Identity;
@@ -32,6 +32,7 @@ use crate::types::{RelayUrl, Url};
 use crate::{
     Alphabet, Event, ImageDimensions, JsonUtil, Kind, PublicKey, SingleLetterTag, Timestamp,
 };
+use crate::nips::nip01::;
 
 const ALL_RELAYS: &str = "ALL_RELAYS";
 const GIT_REFS_HEADS: &str = "ref: refs/heads/";
@@ -41,6 +42,9 @@ const GIT_REFS_HEADS: &str = "ref: refs/heads/";
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TagStandard {
+    /// NIP-01
+    NIP01(TagStandardNip01),
+
     /// Event
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md> and <https://github.com/nostr-protocol/nips/blob/master/10.md>
@@ -312,16 +316,11 @@ impl TagStandard {
     // TODO: require the event kind for parsing a tag?
     /// Parse tag from slice of string
     #[inline]
-    pub fn parse<S>(tag: &[S]) -> Result<Self, Error>
+    pub fn parse<S>(kind: Kind, tag: &[S]) -> Result<Self, Error>
     where
         S: AsRef<str>,
     {
-        let tag_kind: TagKind = match tag.first() {
-            Some(kind) => TagKind::from(kind.as_ref()),
-            None => return Err(Error::KindNotFound),
-        };
-
-        Self::internal_parse(tag_kind, tag)
+        todo!()
     }
 
     fn internal_parse<S>(tag_kind: TagKind, tag: &[S]) -> Result<Self, Error>
