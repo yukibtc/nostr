@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use nostr_database::Events;
 
+use super::blocking::Blocking;
 use super::filters_arg::FiltersArg;
 use crate::client::{Client, Error};
 use crate::relay::ReqExitPolicy;
@@ -82,3 +83,5 @@ where
         Box::pin(self.exec())
     }
 }
+
+impl<'client, 'url> Blocking for FetchEvents<'client, 'url> where 'url: 'client {}
