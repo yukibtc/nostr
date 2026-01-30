@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use heed::RoTxn;
+use nostr_database::flatbuffers::FlatBufferEvent;
 use nostr_database::prelude::*;
 
 pub mod prelude;
@@ -105,7 +107,7 @@ impl NostrLmdbBuilder {
 }
 
 /// LMDB Nostr Database
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NostrLmdb {
     db: Store,
 }
@@ -133,6 +135,36 @@ impl NostrLmdb {
     #[inline]
     pub async fn reindex(&self) -> Result<(), DatabaseError> {
         self.db.reindex().await.map_err(DatabaseError::backend)
+    }
+
+    /// Get a read transaction
+    ///
+    /// This should never block the current thread
+    #[inline]
+    pub fn read_txn(&self) -> Result<RoTxn, DatabaseError> {
+        self.db.read_txn().map_err(DatabaseError::backend)
+    }
+
+    /// Get event by ID
+    #[inline]
+    pub fn get_event_by_id<'a>(
+        &self,
+        txn: &'a RoTxn,
+        id: &EventId,
+    ) -> Result<Option<FlatBufferEvent<'a>>, DatabaseError> {
+        self.db
+            .get_event_by_id(txn, id)
+            .map_err(DatabaseError::backend)
+    }
+
+    /// Zero-copy query events
+    #[inline]
+    pub fn find_events<'a>(
+        &'a self,
+        txn: &'a RoTxn,
+        filter: Filter,
+    ) -> Result<Box<dyn Iterator<Item = FlatBufferEvent<'a>> + 'a>, DatabaseError> {
+        self.db.query(&txn, filter).map_err(DatabaseError::backend)
     }
 }
 
@@ -180,10 +212,13 @@ impl NostrDatabase for NostrLmdb {
         event_id: &'a EventId,
     ) -> BoxedFuture<'a, Result<Option<Event>, DatabaseError>> {
         Box::pin(async move {
-            self.db
-                .get_event_by_id(*event_id)
-                .await
-                .map_err(DatabaseError::backend)
+            let txn = self.read_txn()?;
+            let event: Option<Event> = self.get_event_by_id(&txn, event_id)?.map(|e| {
+                let e: EventBorrow = e.into();
+                e.into_owned()
+            });
+            txn.commit().map_err(DatabaseError::backend)?;
+            Ok(event)
         })
     }
 
@@ -192,7 +227,19 @@ impl NostrDatabase for NostrLmdb {
     }
 
     fn query(&self, filter: Filter) -> BoxedFuture<Result<Events, DatabaseError>> {
-        Box::pin(async move { self.db.query(filter).await.map_err(DatabaseError::backend) })
+        Box::pin(async move {
+            let mut events: Events = Events::new(&filter);
+
+            let txn: RoTxn = self.read_txn()?;
+            let output = self.find_events(&txn, filter)?;
+            events.extend(output.into_iter().map(|e| {
+                let e: EventBorrow = e.into();
+                e.into_owned()
+            }));
+            txn.commit().map_err(DatabaseError::backend)?;
+
+            Ok(events)
+        })
     }
 
     fn negentropy_items(

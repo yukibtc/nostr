@@ -13,7 +13,7 @@ use heed::byteorder::NativeEndian;
 use heed::types::{Bytes, Unit, U64};
 use heed::{Database, Env, EnvFlags, EnvOpenOptions, RoRange, RoTxn, RwTxn};
 use nostr::prelude::*;
-use nostr_database::flatbuffers::FlatBufferDecodeBorrowed;
+use nostr_database::flatbuffers::{FlatBufferDecodeBorrowed, FlatBufferEvent};
 use nostr_database::{FlatBufferBuilder, FlatBufferEncode, RejectedReason, SaveEventStatus};
 
 mod index;
@@ -510,9 +510,9 @@ impl Lmdb {
         &self,
         txn: &'a RoTxn,
         event_id: &[u8],
-    ) -> Result<Option<EventBorrow<'a>>, Error> {
+    ) -> Result<Option<FlatBufferEvent<'a>>, Error> {
         match self.events.get(txn, event_id)? {
-            Some(bytes) => Ok(Some(EventBorrow::decode(bytes)?)),
+            Some(bytes) => Ok(Some(FlatBufferEvent::decode(bytes)?)),
             None => Ok(None),
         }
     }
@@ -524,7 +524,10 @@ impl Lmdb {
             let events = self.query(txn, filter)?;
             events
                 .into_iter()
-                .map(|event| EventIndexKeys::new(event))
+                .map(|event| {
+                    let event: EventBorrow = event.into();
+                    EventIndexKeys::new(event)
+                })
                 .collect()
         }; // All EventBorrow instances dropped here
 
@@ -583,7 +586,7 @@ impl Lmdb {
         &'a self,
         txn: &'a RoTxn,
         filter: Filter,
-    ) -> Result<Box<dyn Iterator<Item = EventBorrow<'a>> + 'a>, Error> {
+    ) -> Result<Box<dyn Iterator<Item = FlatBufferEvent<'a>> + 'a>, Error> {
         if let (Some(since), Some(until)) = (filter.since, filter.until) {
             if since > until {
                 return Ok(Box::new(iter::empty()));
@@ -591,7 +594,7 @@ impl Lmdb {
         }
 
         // We insert into a BTreeSet to keep them time-ordered
-        let mut output: BTreeSet<EventBorrow<'a>> = BTreeSet::new();
+        let mut output: BTreeSet<FlatBufferEvent<'a>> = BTreeSet::new();
 
         let limit: Option<usize> = filter.limit;
         let since = filter.since.unwrap_or_else(Timestamp::min);
@@ -645,7 +648,7 @@ impl Lmdb {
         txn: &'a RoTxn,
         filter: DatabaseFilter,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // Fetch by id
         for id in filter.ids.iter() {
@@ -674,7 +677,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -741,7 +744,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -771,7 +774,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -825,7 +828,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -855,7 +858,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -883,7 +886,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -907,7 +910,7 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error> {
         // We may bring since forward if we hit the limit without going back that
         // far, so we use a mutable since:
@@ -934,13 +937,13 @@ impl Lmdb {
         since: Timestamp,
         until: Timestamp,
         limit: Option<usize>,
-    ) -> Result<Box<dyn Iterator<Item = EventBorrow<'a>> + 'a>, Error> {
+    ) -> Result<Box<dyn Iterator<Item = FlatBufferEvent<'a>> + 'a>, Error> {
         // Iterate over created _at index, so events are already sorted
         Ok(Box::new(
             self.ci_iter(txn, since, until)?
                 .filter_map(move |res| {
                     let (_key, value) = res.ok()?;
-                    let event: EventBorrow = self.get_event_by_id(txn, value).ok()??;
+                    let event: FlatBufferEvent = self.get_event_by_id(txn, value).ok()??;
 
                     if filter.match_event(&event) {
                         Some(event)
@@ -959,7 +962,7 @@ impl Lmdb {
         iter: I,
         since: &mut Timestamp,
         limit: Option<usize>,
-        output: &mut BTreeSet<EventBorrow<'a>>,
+        output: &mut BTreeSet<FlatBufferEvent<'a>>,
     ) -> Result<(), Error>
     where
         I: IntoIterator<Item = &'i [u8]>,
@@ -1003,7 +1006,7 @@ impl Lmdb {
         txn: &'a RoTxn,
         author: &PublicKey,
         kind: Kind,
-    ) -> Result<Option<EventBorrow<'a>>, Error> {
+    ) -> Result<Option<FlatBufferEvent<'a>>, Error> {
         if !kind.is_replaceable() {
             return Err(Error::WrongEventKind);
         }
@@ -1028,7 +1031,7 @@ impl Lmdb {
         &'a self,
         txn: &'a RoTxn,
         addr: &Coordinate,
-    ) -> Result<Option<EventBorrow<'a>>, Error> {
+    ) -> Result<Option<FlatBufferEvent<'a>>, Error> {
         if !addr.kind.is_addressable() {
             return Err(Error::WrongEventKind);
         }
@@ -1083,6 +1086,7 @@ impl Lmdb {
         for result in iter {
             let (_key, id) = result?;
             if let Some(event) = self.get_event_by_id(txn, id)? {
+                let event: EventBorrow = event.into();
                 indexes.push(EventIndexKeys::new(event));
             }
         }
@@ -1124,6 +1128,7 @@ impl Lmdb {
             if let Some(event) = self.get_event_by_id(txn, id)? {
                 // Our index doesn't have Kind embedded, so we have to check it
                 if event.kind == coordinate.kind.as_u16() {
+                    let event: EventBorrow = event.into();
                     indexes.push(EventIndexKeys::new(event));
                 }
             }
@@ -1322,6 +1327,7 @@ impl Lmdb {
                     return Ok(true);
                 }
 
+                let target: EventBorrow = event.into();
                 deletions_to_process.push((*id, EventIndexKeys::new(target)));
             }
         }
@@ -1382,7 +1388,7 @@ impl Lmdb {
 }
 
 /// Check if the new event should replace the stored one.
-fn has_event_been_replaced(stored: &EventBorrow, event: &Event) -> bool {
+fn has_event_been_replaced(stored: &FlatBufferEvent, event: &Event) -> bool {
     match stored.created_at.cmp(&event.created_at) {
         Ordering::Greater => true,
         Ordering::Equal => {
@@ -1449,15 +1455,15 @@ mod tests {
 
             // Verify kc_index was populated by querying by kind
             let filter = Filter::new().kind(Kind::from(1));
-            let results: Vec<EventBorrow> = lmdb.query(&txn, filter).unwrap().collect();
+            let results: Vec<FlatBufferEvent> = lmdb.query(&txn, filter).unwrap().collect();
             assert_eq!(results.len(), 2, "Should find 2 events of kind 1");
 
             let filter = Filter::new().kind(Kind::from(3));
-            let results: Vec<EventBorrow> = lmdb.query(&txn, filter).unwrap().collect();
+            let results: Vec<FlatBufferEvent> = lmdb.query(&txn, filter).unwrap().collect();
             assert_eq!(results.len(), 1, "Should find 1 event of kind 3");
 
             let filter = Filter::new().kind(Kind::from(5));
-            let results: Vec<EventBorrow> = lmdb.query(&txn, filter).unwrap().collect();
+            let results: Vec<FlatBufferEvent> = lmdb.query(&txn, filter).unwrap().collect();
             assert_eq!(results.len(), 1, "Should find 1 event of kind 5");
 
             // Verify kc_index has entries

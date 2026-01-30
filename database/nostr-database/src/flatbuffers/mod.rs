@@ -5,10 +5,13 @@
 //! Nostr Database Flatbuffers
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
-use flatbuffers::InvalidFlatbuffer;
 pub use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Vector};
+use flatbuffers::{InvalidFlatbuffer, VectorIter};
 use nostr::prelude::*;
 use nostr::secp256k1;
 use nostr::secp256k1::schnorr::Signature;
@@ -16,6 +19,7 @@ use nostr::secp256k1::schnorr::Signature;
 #[allow(unused_imports, dead_code, clippy::all, unsafe_code, missing_docs)]
 mod event_generated;
 
+use self::event_fbs::StringVector;
 pub use self::event_generated::event_fbs;
 
 /// Missing field
@@ -86,6 +90,153 @@ impl From<tag::Error> for Error {
 impl From<secp256k1::Error> for Error {
     fn from(e: secp256k1::Error) -> Self {
         Self::Secp256k1(e)
+    }
+}
+
+/// Flatbuffer nostr event tag
+pub struct FlatBufferTag<'a> {
+    tag: Vector<'a, ForwardsUOffset<&'a str>>,
+}
+
+impl<'a> FlatBufferTag<'a> {
+    /// Get the tag kind
+    #[inline]
+    pub fn kind(&self) -> Option<&'a str> {
+        if self.tag.is_empty() {
+            return None;
+        }
+
+        Some(self.tag.get(0).as_ref())
+    }
+
+    /// Return the **first** tag value (index `1`), if exists.
+    #[inline]
+    pub fn content(&self) -> Option<&'a str> {
+        if self.tag.len() < 2 {
+            return None;
+        }
+
+        Some(self.tag.get(1).as_ref())
+    }
+
+    /// Extract tag name and value
+    pub fn extract(&self) -> Option<(SingleLetterTag, &'a str)> {
+        if self.tag.len() >= 2 {
+            let tag_name: SingleLetterTag = SingleLetterTag::from_str(&self.tag.get(0)).ok()?;
+            let tag_value: &str = &self.tag.get(1);
+            Some((tag_name, tag_value))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn to_cow_tag(&self) -> Option<CowTag<'a>> {
+        CowTag::parse(self.tag.iter().map(Cow::Borrowed).collect()).ok()
+    }
+}
+
+/// Flatbuffer nostr event tags
+#[derive(Default)]
+pub struct FlatBufferEventTags<'a> {
+    tags: Vector<'a, ForwardsUOffset<StringVector<'a>>>,
+}
+
+impl<'a> FlatBufferEventTags<'a> {
+    /// Check if it's empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+    }
+
+    /// Iterate over tags
+    #[inline]
+    pub fn iter(&self) -> FlatBufferEventTagsIter<'a> {
+        FlatBufferEventTagsIter {
+            tags: self.tags.iter(),
+        }
+    }
+}
+
+/// Flatbuffer nostr event tags iter
+pub struct FlatBufferEventTagsIter<'a> {
+    tags: VectorIter<'a, ForwardsUOffset<StringVector<'a>>>,
+}
+
+impl<'a> Iterator for FlatBufferEventTagsIter<'a> {
+    type Item = FlatBufferTag<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.tags
+            .next()
+            .map(|v| v.data())
+            .flatten()
+            .map(|t| FlatBufferTag { tag: t })
+    }
+}
+
+/// Flatbuffer nostr event
+pub struct FlatBufferEvent<'a> {
+    /// Event ID
+    pub id: &'a [u8; 32],
+    /// Author
+    pub pubkey: &'a [u8; 32],
+    /// UNIX timestamp (seconds)
+    pub created_at: Timestamp,
+    /// Kind
+    pub kind: u16,
+    /// Tag list
+    pub tags: FlatBufferEventTags<'a>,
+    /// Content
+    pub content: &'a str,
+    /// Signature
+    pub sig: &'a [u8; 64],
+}
+
+impl PartialEq for FlatBufferEvent<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for FlatBufferEvent<'_> {}
+
+impl PartialOrd for FlatBufferEvent<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FlatBufferEvent<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.created_at != other.created_at {
+            // Descending order
+            // Lookup ID: EVENT_ORD_IMPL
+            self.created_at.cmp(&other.created_at).reverse()
+        } else {
+            self.id.cmp(other.id)
+        }
+    }
+}
+
+impl Hash for FlatBufferEvent<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl<'a> From<FlatBufferEvent<'a>> for EventBorrow<'a> {
+    fn from(value: FlatBufferEvent<'a>) -> Self {
+        Self {
+            id: value.id,
+            pubkey: value.pubkey,
+            created_at: value.created_at,
+            kind: value.kind,
+            tags: value.tags.iter().filter_map(|t| t.to_cow_tag()).collect(),
+            content: value.content,
+            sig: value.sig,
+        }
     }
 }
 
@@ -180,11 +331,11 @@ impl<'a> FlatBufferDecodeBorrowed<'a> for EventBorrow<'a> {
         let ev = event_fbs::root_as_event(buf)?;
 
         let fb_tags = ev.tags().ok_or(Error::FieldNotFound(MissingField::Tags))?;
-        let mut tags = Vec::with_capacity(fb_tags.len());
-
-        for tag in fb_tags.iter().filter_map(|t| t.data()) {
-            tags.push(CowTag::parse(tag.into_iter().map(Cow::Borrowed).collect())?);
-        }
+        let tags = fb_tags
+            .iter()
+            .filter_map(|t| t.data())
+            .map(|tag| CowTag::parse(tag.into_iter().map(Cow::Borrowed).collect()))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             id: &ev.id().ok_or(Error::FieldNotFound(MissingField::Id))?.0,
@@ -203,14 +354,36 @@ impl<'a> FlatBufferDecodeBorrowed<'a> for EventBorrow<'a> {
     }
 }
 
+impl<'a> FlatBufferDecodeBorrowed<'a> for FlatBufferEvent<'a> {
+    #[inline]
+    fn decode(buf: &'a [u8]) -> Result<Self, Error> {
+        let ev: event_fbs::Event = event_fbs::root_as_event(buf)?;
+
+        Ok(Self {
+            id: &ev.id().ok_or(Error::FieldNotFound(MissingField::Id))?.0,
+            pubkey: &ev
+                .pubkey()
+                .ok_or(Error::FieldNotFound(MissingField::Pubkey))?
+                .0,
+            created_at: Timestamp::from_secs(ev.created_at()),
+            kind: ev.kind() as u16, // TODO: should use try_into
+            tags: FlatBufferEventTags {
+                tags: ev.tags().ok_or(Error::FieldNotFound(MissingField::Tags))?,
+            },
+            content: ev
+                .content()
+                .ok_or(Error::FieldNotFound(MissingField::Content))?,
+            sig: &ev.sig().ok_or(Error::FieldNotFound(MissingField::Sig))?.0,
+        })
+    }
+}
+
 #[cfg(bench)]
 mod benches {
     use super::*;
     use crate::test::{black_box, Bencher};
 
-    #[bench]
-    pub fn bench_decode_flatbuf_event_borrow(bh: &mut Bencher) {
-        let json = r#"{
+    const EVENT_JSON: &str = r#"{
               "content": "+",
               "created_at": 1716508454,
               "id": "3e9e9c2fbf263590860a9c60a7de6b0d166230a5a15aa8dcdb70f537cec9807a",
@@ -231,13 +404,28 @@ mod benches {
                 ]
               ]
             }"#;
-        let event = Event::from_json(json).unwrap();
+
+    #[bench]
+    pub fn bench_decode_flatbuf_event_borrow(bh: &mut Bencher) {
+        let event = Event::from_json(EVENT_JSON).unwrap();
 
         let mut fbb = FlatBufferBuilder::new();
         let bytes = event.encode(&mut fbb);
 
         bh.iter(|| {
             black_box(EventBorrow::decode(bytes)).unwrap();
+        });
+    }
+
+    #[bench]
+    pub fn bench_decode_flatbuf_event(bh: &mut Bencher) {
+        let event = Event::from_json(EVENT_JSON).unwrap();
+
+        let mut fbb = FlatBufferBuilder::new();
+        let bytes = event.encode(&mut fbb);
+
+        bh.iter(|| {
+            black_box(FlatBufferEvent::decode(bytes)).unwrap();
         });
     }
 }

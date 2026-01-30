@@ -430,11 +430,11 @@ mod tests {
         assert!(matches!(results[2], Ok(SaveEventStatus::Success)));
 
         // Verify the new events were saved
+        let txn = store.read_txn().unwrap();
         let saved_count = store
-            .query(Filter::new())
-            .await
+            .query(&txn, Filter::new())
             .expect("Failed to query")
-            .len();
+            .count();
         assert_eq!(saved_count, 3); // event1, event2, event3
     }
 
@@ -478,11 +478,11 @@ mod tests {
         delete_result.expect("Failed to delete events");
 
         // Verify results
+        let txn = store.read_txn().unwrap();
         let remaining = store
-            .query(Filter::new())
-            .await
+            .query(&txn, Filter::new())
             .expect("Failed to query")
-            .len();
+            .count();
 
         // We had 10 events, deleted 5, added 2
         assert_eq!(remaining, 7);

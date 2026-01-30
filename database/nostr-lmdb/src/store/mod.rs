@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use async_utility::task;
 use flume::Sender;
 use heed::RoTxn;
+use nostr_database::flatbuffers::FlatBufferEvent;
 use nostr_database::prelude::*;
 
 mod error;
@@ -20,7 +21,7 @@ use self::error::Error;
 use self::ingester::{Ingester, IngesterItem};
 use self::lmdb::Lmdb;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Store {
     db: Lmdb,
     ingester: Sender<IngesterItem>,
@@ -56,7 +57,7 @@ impl Store {
     }
 
     #[inline]
-    async fn interact<F, R>(&self, f: F) -> Result<R, Error>
+    pub(super) async fn interact<F, R>(&self, f: F) -> Result<R, Error>
     where
         F: FnOnce(Lmdb) -> R + Send + 'static,
         R: Send + 'static,
@@ -64,6 +65,14 @@ impl Store {
         // TODO: is this clone cheap?
         let db = self.db.clone();
         Ok(task::spawn_blocking(move || f(db)).await?)
+    }
+
+    /// Get a read transaction
+    ///
+    /// This should never block the current thread
+    #[inline]
+    pub(super) fn read_txn(&self) -> Result<RoTxn, Error> {
+        self.db.read_txn()
     }
 
     pub(crate) async fn reindex(&self) -> Result<(), Error> {
@@ -78,16 +87,13 @@ impl Store {
         rx.await?
     }
 
-    pub(super) async fn get_event_by_id(&self, id: EventId) -> Result<Option<Event>, Error> {
-        self.interact(move |db| {
-            let txn = db.read_txn()?;
-            let event: Option<Event> = db
-                .get_event_by_id(&txn, id.as_bytes())?
-                .map(|e| e.into_owned());
-            txn.commit()?;
-            Ok(event)
-        })
-        .await?
+    #[inline]
+    pub(super) fn get_event_by_id<'a>(
+        &self,
+        txn: &'a RoTxn<'_>,
+        id: &EventId,
+    ) -> Result<Option<FlatBufferEvent<'a>>, Error> {
+        self.db.get_event_by_id(txn, id.as_bytes())
     }
 
     pub(super) async fn check_id(&self, id: EventId) -> Result<DatabaseEventStatus, Error> {
@@ -119,33 +125,30 @@ impl Store {
         .await?
     }
 
-    // Lookup ID: EVENT_ORD_IMPL
-    pub(super) async fn query(&self, filter: Filter) -> Result<Events, Error> {
-        self.interact(move |db| {
-            let mut events: Events = Events::new(&filter);
-
-            let txn: RoTxn = db.read_txn()?;
-            let output = db.query(&txn, filter)?;
-            events.extend(output.into_iter().map(|e| e.into_owned()));
-            txn.commit()?;
-
-            Ok(events)
-        })
-        .await?
+    #[inline]
+    pub(super) fn query<'a>(
+        &'a self,
+        txn: &'a RoTxn,
+        filter: Filter,
+    ) -> Result<Box<dyn Iterator<Item = FlatBufferEvent<'a>> + 'a>, Error> {
+        self.db.query(&txn, filter)
     }
 
     pub(super) async fn negentropy_items(
         &self,
         filter: Filter,
     ) -> Result<Vec<(EventId, Timestamp)>, Error> {
-        let txn = self.db.read_txn()?;
-        let events = self.db.query(&txn, filter)?;
-        let items = events
-            .into_iter()
-            .map(|e| (EventId::from_byte_array(*e.id), e.created_at))
-            .collect();
-        txn.commit()?;
-        Ok(items)
+        self.interact(move |db| {
+            let txn = db.read_txn()?;
+            let events = db.query(&txn, filter)?;
+            let items = events
+                .into_iter()
+                .map(|e| (EventId::from_byte_array(*e.id), e.created_at))
+                .collect();
+            txn.commit()?;
+            Ok(items)
+        })
+        .await?
     }
 
     pub(super) async fn delete(&self, filter: Filter) -> Result<(), Error> {
