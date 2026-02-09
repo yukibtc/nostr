@@ -39,6 +39,8 @@ jobs:
           - nostr --no-default-features --features alloc,rand
           - nostr --no-default-features --features alloc,all-nips
           - nostr --no-default-features --features alloc,all-nips,rand
+          - nostr-runtime
+          - nostr-runtime --features tokio
           - nostr-browser-signer --target wasm32-unknown-unknown
           - nostr-browser-signer-proxy
           - nostr-blossom

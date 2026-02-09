@@ -5,6 +5,9 @@ members = [
     # Nostr SDK
     "sdk",
 
+    # Runtime
+    "runtime",
+
     # Nostr Database
     "database/nostr-database",
     "database/nostr-database-test-suite",
@@ -58,6 +61,7 @@ nostr-gossip-test-suite = { path = "./gossip/nostr-gossip-test-suite" }
 nostr-lmdb = { version = "0.44", path = "./database/nostr-lmdb", default-features = false }
 nostr-ndb = { version = "0.44", path = "./database/nostr-ndb", default-features = false }
 nostr-relay-builder = { version = "0.44", path = "./crates/nostr-relay-builder", default-features = false }
+nostr-runtime = { version = "0.44", path = "./runtime", default-features = false }
 nostr-sdk = { version = "0.44", path = "./sdk", default-features = false }
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1.0", default-features = false }

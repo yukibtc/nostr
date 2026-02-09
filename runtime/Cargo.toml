@@ -1,0 +1,22 @@
+[package]
+name = "nostr-runtime"
+version = "0.44.0"
+edition = "2021"
+description = "Nostr Runtime"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+keywords = ["nostr", "runtime"]
+
+[features]
+default = []
+# Enables tokio runtime
+tokio = ["dep:tokio", "dep:tokio-util"]
+
+[dependencies]
+futures-io = "0.3"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "net"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }

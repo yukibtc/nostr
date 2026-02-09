@@ -13,6 +13,8 @@ buildargs=(
     "-p nostr --no-default-features --features alloc,rand"          # alloc +rand
     "-p nostr --no-default-features --features alloc,all-nips"      # alloc + all-nips
     "-p nostr --no-default-features --features alloc,all-nips,rand" # alloc + all-nips + rand
+    "-p nostr-runtime"
+    "-p nostr-runtime --features tokio"
     "-p nostr-browser-signer --target wasm32-unknown-unknown"
     "-p nostr-browser-signer-proxy"
     "-p nostr-blossom"
