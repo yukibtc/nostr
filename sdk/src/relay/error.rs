@@ -8,6 +8,7 @@ use nostr_runtime::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::policy::PolicyError;
+use crate::runtime::TimeoutError;
 use crate::transport::error::TransportError;
 
 /// Relay error
