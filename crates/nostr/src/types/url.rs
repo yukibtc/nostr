@@ -214,6 +214,26 @@ impl RelayUrl {
         self.url.host()
     }
 
+    /// Return the parsed representation of the host for this URL.
+    /// Non-ASCII domain labels are punycode-encoded per IDNA if this is the host
+    /// of a special URL, or percent encoded for non-special URLs.
+    #[inline]
+    pub fn host_str(&self) -> Option<&str> {
+        self.url.host_str()
+    }
+
+    /// Get the port
+    #[inline]
+    pub fn port(&self) -> Option<u16> {
+        self.url.port()
+    }
+
+    /// Get the port or the known default
+    #[inline]
+    pub fn port_or_known_default(&self) -> Option<u16> {
+        self.url.port_or_known_default()
+    }
+
     /// Return the serialization of this relay URL without the trailing slash.
     ///
     /// This method will always remove the trailing slash.

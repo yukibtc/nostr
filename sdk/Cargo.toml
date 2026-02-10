@@ -16,13 +16,13 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["runtime-tokio"]
+default = ["runtime-tokio", "transport-tungstenite"]
 # Enables tokio runtime
 runtime-tokio = ["nostr-runtime/tokio"]
+transport-tungstenite = ["dep:nostr-transport-tungstenite"]
 
 [dependencies]
-async-wsocket = { workspace = true, features = ["socks"] }
-futures = "0.3"
+futures.workspace = true
 hex = { workspace = true, features = ["std"] }
 lru.workspace = true
 negentropy = { workspace = true, features = ["std"] }
@@ -30,6 +30,8 @@ nostr = { workspace = true, features = ["std", "rand", "os-rng"] }
 nostr-database.workspace = true
 nostr-gossip.workspace = true
 nostr-runtime.workspace = true
+nostr-transport.workspace = true
+nostr-transport-tungstenite = { workspace = true, features = ["rustls"], optional = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = { workspace = true, features = ["std"] }
@@ -42,6 +44,7 @@ nostr-ndb.workspace = true
 nostr-gossip-memory.workspace = true
 nostr-relay-builder.workspace = true
 nostr-runtime = { workspace = true, features = ["tokio"] }
+smol = "2.0"
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
@@ -84,6 +87,10 @@ required-features = ["runtime-tokio"]
 [[example]]
 name = "nostrdb"
 required-features = ["runtime-tokio"]
+
+[[example]]
+name = "smol-runtime"
+required-features = ["transport-tungstenite"]
 
 [[example]]
 name = "stream-events"

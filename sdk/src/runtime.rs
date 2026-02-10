@@ -1,13 +1,12 @@
 use std::future::Future;
 use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nostr::util::BoxedFuture;
 use nostr_runtime::prelude::*;
-use tokio_stream::StreamExt;
+use nostr_transport::prelude::*;
+#[cfg(feature = "transport-tungstenite")]
+use nostr_transport_tungstenite::prelude::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeWrapper {
@@ -40,6 +39,43 @@ impl RuntimeWrapper {
         match duration {
             Some(duration) => self.runtime.timeout(duration, future).await,
             None => Ok(future.await),
+        }
+    }
+}
+
+pub(crate) fn get_runtime(runtime: Option<Arc<dyn NostrRuntime>>) -> Option<Arc<dyn NostrRuntime>> {
+    match runtime {
+        Some(runtime) => Some(runtime),
+        None => match global::runtime() {
+            Some(runtime) => Some(runtime.clone()),
+            None => {
+                #[cfg(feature = "runtime-tokio")]
+                match TokioRuntime::try_current() {
+                    Ok(runtime) => Some(Arc::new(runtime)),
+                    Err(_) => None,
+                }
+                #[cfg(not(feature = "runtime-tokio"))]
+                None
+            }
+        },
+    }
+}
+
+pub(crate) fn get_transport(
+    runtime: &Arc<dyn NostrRuntime>,
+    transport: Option<Arc<dyn NostrWebSocketTransport>>,
+) -> Option<Arc<dyn NostrWebSocketTransport>> {
+    match transport {
+        Some(transport) => Some(transport),
+        None => {
+            #[cfg(feature = "transport-tungstenite")]
+            {
+                Some(Arc::new(
+                    TungsteniteWebSocketTransport::default().runtime(runtime.clone()),
+                ))
+            }
+            #[cfg(not(feature = "transport-tungstenite"))]
+            None
         }
     }
 }

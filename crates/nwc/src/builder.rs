@@ -1,10 +1,9 @@
 //! Nostr Wallet Connect builder
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use nostr::nips::nip47::NostrWalletConnectUri;
-use nostr_sdk::monitor::Monitor;
-use nostr_sdk::relay::RelayOptions;
+use nostr_sdk::prelude::*;
 
 use crate::{Error, NostrWalletConnect};
 
@@ -20,6 +19,8 @@ pub struct NostrWalletConnectBuilder {
     pub timeout: Duration,
     /// Relay monitor.
     pub monitor: Option<Monitor>,
+    /// WebSocket transport
+    pub websocket_transport: Option<Arc<dyn NostrWebSocketTransport>>,
     /// Relay options.
     ///
     /// See [`RelayOptions`] for more details.
@@ -33,6 +34,7 @@ impl NostrWalletConnectBuilder {
             uri,
             timeout: DEFAULT_TIMEOUT,
             monitor: None,
+            websocket_transport: None,
             relay: RelayOptions::default(),
         }
     }

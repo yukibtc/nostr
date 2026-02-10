@@ -81,9 +81,10 @@ NOTE: Currently `nip03` feature not support WASM.
 
 The following crate feature flags are available:
 
-| Feature            | Default | Description                                                   |
-|--------------------|:-------:|---------------------------------------------------------------|
-| `runtime-tokio`    |   Yes   | Enable tokio runtime                                          |
+| Feature                 | Default | Description                               |
+|-------------------------|:-------:|-------------------------------------------|
+| `runtime-tokio`         |   Yes   | Enable tokio runtime                      |
+| `transport-tungstenite` |   Yes   | Enable tungstenite as WebSocket transport |
 
 ## Changelog
 

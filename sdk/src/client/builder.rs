@@ -4,26 +4,20 @@
 
 //! Client builder
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
-use async_wsocket::ConnectionMode;
 use nostr::signer::{IntoNostrSigner, NostrSigner};
 use nostr_database::memory::MemoryDatabase;
 use nostr_database::{IntoNostrDatabase, NostrDatabase};
 use nostr_gossip::{GossipAllowedRelays, IntoNostrGossip, NostrGossip};
-use nostr_runtime::runtime::*;
+use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
 
 use crate::client::{Client, Error};
 use crate::monitor::Monitor;
 use crate::policy::AdmitPolicy;
-use crate::prelude::RelayLimits;
-use crate::transport::websocket::{
-    DefaultWebsocketTransport, IntoWebSocketTransport, WebSocketTransport,
-};
+use crate::relay::RelayLimits;
 
 const DEFAULT_NOTIFICATION_CHANNEL_SIZE: usize = 4096;
 
@@ -59,10 +53,10 @@ impl Default for GossipRelayLimits {
 pub struct ClientBuilder {
     /// Nostr Runtime
     pub runtime: Option<Arc<dyn NostrRuntime>>,
+    /// WebSocket transport
+    pub websocket_transport: Option<Arc<dyn NostrWebSocketTransport>>,
     /// Nostr Signer
     pub signer: Option<Arc<dyn NostrSigner>>,
-    /// WebSocket transport
-    pub websocket_transport: Arc<dyn WebSocketTransport>,
     /// Admission policy
     pub admit_policy: Option<Arc<dyn AdmitPolicy>>,
     /// Database
@@ -75,9 +69,6 @@ pub struct ClientBuilder {
     pub gossip_allowed: GossipAllowedRelays,
     /// Relay monitor
     pub monitor: Option<Monitor>,
-    /// Connection
-    #[cfg(not(target_arch = "wasm32"))]
-    pub connection: Connection,
     /// Max relays allowed in the pool
     pub max_relays: Option<usize>,
     /// Automatic authentication to relays (NIP-42)
@@ -99,25 +90,15 @@ pub struct ClientBuilder {
 impl Default for ClientBuilder {
     fn default() -> Self {
         Self {
-            #[cfg(feature = "runtime-tokio")]
-            // Try to get runtime from current handle
-            runtime: match TokioRuntime::try_current() {
-                Ok(runtime) => Some(Arc::new(runtime)),
-                // Try to create a new runtime
-                Err(_) => None,
-            },
-            #[cfg(not(feature = "runtime-tokio"))]
             runtime: None,
+            websocket_transport: None,
             signer: None,
-            websocket_transport: Arc::new(DefaultWebsocketTransport),
             admit_policy: None,
             database: Arc::new(MemoryDatabase::default()),
             gossip: None,
             gossip_limits: GossipRelayLimits::default(),
             gossip_allowed: GossipAllowedRelays::default(),
             monitor: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            connection: Connection::default(),
             max_relays: None,
             automatic_authentication: true,
             relay_limits: RelayLimits::default(),
@@ -154,8 +135,18 @@ impl ClientBuilder {
     /// # }
     /// ```
     #[inline]
-    pub fn runtime(mut self, runtime: Arc<dyn NostrRuntime>) -> Self {
-        self.runtime = Some(runtime.into());
+    pub fn runtime<T>(mut self, runtime: Arc<T>) -> Self
+    where
+        T: NostrRuntime + NostrRuntimeTcpStream + 'static,
+    {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    /// Set a WebSocket transport
+    #[inline]
+    pub fn websocket_transport(mut self, transport: Arc<dyn NostrWebSocketTransport>) -> Self {
+        self.websocket_transport = Some(transport);
         self
     }
 
@@ -175,18 +166,6 @@ impl ClientBuilder {
         T: IntoNostrSigner,
     {
         self.signer = Some(signer.into_nostr_signer());
-        self
-    }
-
-    /// Set custom WebSocket transport
-    ///
-    /// By default [`DefaultWebsocketTransport`] is used.
-    #[inline]
-    pub fn websocket_transport<T>(mut self, transport: T) -> Self
-    where
-        T: IntoWebSocketTransport,
-    {
-        self.websocket_transport = transport.into_transport();
         self
     }
 
@@ -238,14 +217,6 @@ impl ClientBuilder {
     #[inline]
     pub fn monitor(mut self, monitor: Monitor) -> Self {
         self.monitor = Some(monitor);
-        self
-    }
-
-    /// Connection mode and target
-    #[inline]
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn connection(mut self, connection: Connection) -> Self {
-        self.connection = connection;
         self
     }
 
@@ -329,76 +300,4 @@ pub enum SleepWhenIdle {
         /// After how much time of inactivity put the relay to sleep.
         timeout: Duration,
     },
-}
-
-/// Connection target
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum ConnectionTarget {
-    /// All relays
-    #[default]
-    All,
-    /// Only `.onion` relays
-    Onion,
-}
-
-/// Connection
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Connection {
-    /// Mode
-    pub mode: ConnectionMode,
-    /// Target
-    pub target: ConnectionTarget,
-}
-
-#[allow(clippy::derivable_impls)]
-#[cfg(not(target_arch = "wasm32"))]
-impl Default for Connection {
-    fn default() -> Self {
-        Self {
-            mode: ConnectionMode::default(),
-            target: ConnectionTarget::default(),
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Connection {
-    /// New default connection config
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            mode: ConnectionMode::default(),
-            target: ConnectionTarget::default(),
-        }
-    }
-
-    /// Set connection mode (default: direct)
-    #[inline]
-    pub fn mode(mut self, mode: ConnectionMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    /// Set connection target (default: all)
-    #[inline]
-    pub fn target(mut self, target: ConnectionTarget) -> Self {
-        self.target = target;
-        self
-    }
-
-    /// Set direct connection
-    #[inline]
-    pub fn direct(mut self) -> Self {
-        self.mode = ConnectionMode::direct();
-        self
-    }
-
-    /// Set proxy
-    #[inline]
-    pub fn proxy(mut self, addr: SocketAddr) -> Self {
-        self.mode = ConnectionMode::proxy(addr);
-        self
-    }
 }

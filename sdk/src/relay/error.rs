@@ -5,11 +5,10 @@ use nostr::event::{self, builder};
 use nostr::message::MessageHandleError;
 use nostr_database::DatabaseError;
 use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::policy::PolicyError;
-use crate::runtime::TimeoutError;
-use crate::transport::error::TransportError;
 
 /// Relay error
 #[derive(Debug)]
@@ -34,6 +33,8 @@ pub enum Error {
     OneshotRecv(oneshot::error::RecvError),
     /// Runtime not configured
     RuntimeNotConfigured,
+    /// WebSocket transport not configured
+    WebSocketTransportNotConfigured,
     /// Signer not configured
     SignerNotConfigured,
     /// Generic timeout
@@ -142,6 +143,9 @@ impl fmt::Display for Error {
             Self::Negentropy(e) => e.fmt(f),
             Self::OneshotRecv(e) => e.fmt(f),
             Self::RuntimeNotConfigured => write!(f, "runtime not configured"),
+            Self::WebSocketTransportNotConfigured => {
+                write!(f, "websocket transport not configured")
+            }
             Self::SignerNotConfigured => f.write_str("signer not configured"),
             Self::Timeout => f.write_str("timeout"),
             Self::NotRepliedToPing => f.write_str("not replied to ping"),

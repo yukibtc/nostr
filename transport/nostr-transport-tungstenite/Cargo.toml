@@ -1,0 +1,25 @@
+[package]
+name = "nostr-transport-tungstenite"
+version = "0.44.0"
+edition = "2021"
+description = "A Tungstenite runtime-agnostic nostr transport"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+# readme = "README.md"
+rust-version.workspace = true
+keywords = ["nostr", "transport", "tungstenite"]
+
+[features]
+default = ["rustls"]
+rustls = ["dep:futures-rustls", "dep:rustls", "dep:webpki-roots"]
+
+[dependencies]
+async-tungstenite = "0.32"
+futures = "0.3"
+futures-rustls = { version = "0.26", optional = true }
+nostr-runtime.workspace = true
+nostr-transport.workspace = true
+rustls = { version = "0.23", features = ["std", "ring", "tls12"], optional = true }
+webpki-roots = { version = "0.26", optional = true }

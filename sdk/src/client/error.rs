@@ -32,6 +32,8 @@ pub enum Error {
     Json(serde_json::Error),
     /// Runtime not configured
     RuntimeNotConfigured,
+    /// WebSocket transport not configured
+    WebSocketTransportNotConfigured,
     /// Signer not configured
     SignerNotConfigured,
     /// Gossip is not configured
@@ -56,6 +58,7 @@ impl fmt::Display for Error {
             Self::EventBuilder(e) => e.fmt(f),
             Self::Json(e) => e.fmt(f),
             Self::RuntimeNotConfigured => f.write_str("runtime not configured"),
+            Self::WebSocketTransportNotConfigured => f.write_str("websocket transport not configured"),
             Self::SignerNotConfigured => f.write_str("signer not configured"),
             Self::GossipNotConfigured => f.write_str("gossip not configured"),
             Self::GossipFiltersEmpty => {

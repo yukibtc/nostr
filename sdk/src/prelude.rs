@@ -8,12 +8,14 @@
 #![allow(ambiguous_glob_reexports)]
 #![doc(hidden)]
 
-pub use async_wsocket::ConnectionMode;
 pub use futures::StreamExt;
 pub use nostr::prelude::*;
 pub use nostr_database::prelude::*;
 pub use nostr_gossip::prelude::*;
 pub use nostr_runtime::prelude::*;
+pub use nostr_transport::prelude::*;
+#[cfg(feature = "transport-tungstenite")]
+pub use nostr_transport_tungstenite::prelude::*;
 
 pub use crate::client::{self, *};
 pub use crate::monitor::{self, *};

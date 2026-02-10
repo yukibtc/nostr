@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_wsocket::{ConnectionMode, Message};
 use futures::{self, SinkExt, StreamExt};
 use nostr::rand::rngs::OsRng;
 #[cfg(not(target_arch = "wasm32"))]
@@ -13,6 +12,7 @@ use nostr::rand::RngCore;
 use nostr::rand::{Rng, TryRngCore};
 use nostr_database::prelude::*;
 use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::{broadcast, oneshot, Mutex, MutexGuard, Notify, RwLock, RwLockWriteGuard};
 
@@ -32,9 +32,8 @@ use crate::policy::AdmitStatus;
 use crate::relay::status::AtomicRelayStatus;
 use crate::runtime::RuntimeWrapper;
 use crate::shared::SharedState;
-use crate::transport::websocket::{WebSocketSink, WebSocketStream};
 
-type ClientMessageJson = String;
+type ClientMessageJson = Utf8Bytes;
 
 // Skip NIP-50 matches since they may create issues and ban non-malicious relays.
 const MATCH_EVENT_OPTS: MatchEventOptions = MatchEventOptions::new().nip50(false);
@@ -172,11 +171,6 @@ impl InnerRelay {
             internal_notification_sender: relay_notification_sender,
             external_notification_sender: None,
         }
-    }
-
-    #[inline]
-    pub fn connection_mode(&self) -> &ConnectionMode {
-        &self.opts.connection_mode
     }
 
     /// Check if the connection task is running
@@ -483,7 +477,7 @@ impl InnerRelay {
         self.stats.just_woke_up();
     }
 
-    pub(super) fn spawn_connection_task(&self, stream: Option<(WebSocketSink, WebSocketStream)>) {
+    pub(super) fn spawn_connection_task(&self, stream: Option<WebSocketStream>) {
         // Check if the connection task is already running
         // This is checked also later, but it's checked also here to avoid a full-clone if we know that is already running.
         if self.is_running() {
@@ -501,7 +495,7 @@ impl InnerRelay {
     }
 
     /// This **MUST** be called only by the [`InnerRelay::spawn_connection_task`] method!
-    async fn connection_task(self, mut stream: Option<(WebSocketSink, WebSocketStream)>) {
+    async fn connection_task(self, mut stream: Option<WebSocketStream>) {
         // Set the connection task as running and get the previous value.
         let is_running: bool = self.atomic.running.swap(true, Ordering::SeqCst);
 
@@ -645,7 +639,7 @@ impl InnerRelay {
         &self,
         timeout: Duration,
         status_on_failure: RelayStatus,
-    ) -> Result<(WebSocketSink, WebSocketStream), Error> {
+    ) -> Result<WebSocketStream, Error> {
         // Update status
         self.set_status(RelayStatus::Connecting, true);
 
@@ -653,10 +647,7 @@ impl InnerRelay {
         self.stats.new_attempt();
 
         // Connect futures
-        let connect_fut = self
-            .state
-            .transport
-            .connect((&self.url).into(), &self.opts.connection_mode);
+        let connect_fut = self.state.transport.connect(&self.url);
         let fut = self.state.runtime().timeout(timeout, connect_fut);
 
         // Try to connect
@@ -665,14 +656,14 @@ impl InnerRelay {
         tokio::select! {
             // Connect
             res = fut => match res {
-                Ok(Ok((ws_tx, ws_rx))) => {
+                Ok(Ok(stream)) => {
                     // Update status
                     self.set_status(RelayStatus::Connected, true);
 
                     // Increment success stats
                     self.stats.new_success();
 
-                    Ok((ws_tx, ws_rx))
+                    Ok(stream)
                 }
                 Ok(Err(e)) => {
                     // Update status
@@ -699,13 +690,13 @@ impl InnerRelay {
     /// If `stream` arg is passed, no connection attempt will be done.
     async fn connect_and_run(
         &self,
-        stream: Option<(WebSocketSink, WebSocketStream)>,
+        stream: Option<WebSocketStream>,
         rx_nostr: &mut MutexGuard<'_, Receiver<JsonMessageItem>>,
         last_ws_error: &mut Option<String>,
     ) {
         match stream {
             // Already have a stream, go to post-connection stage
-            Some((ws_tx, ws_rx)) => self.post_connection(ws_tx, ws_rx, rx_nostr).await,
+            Some(stream) => self.post_connection(stream, rx_nostr).await,
             // No stream is passed, try to connect
             // Set the status to "disconnected" to allow to automatic retries
             None => match self
@@ -713,7 +704,7 @@ impl InnerRelay {
                 .await
             {
                 // Connection success, go to post-connection stage
-                Ok((ws_tx, ws_rx)) => self.post_connection(ws_tx, ws_rx, rx_nostr).await,
+                Ok(stream) => self.post_connection(stream, rx_nostr).await,
                 // Error during connection
                 Err(e) => {
                     // TODO: avoid string allocation. The error is converted to string only to perform the `!=` binary operation.
@@ -741,8 +732,7 @@ impl InnerRelay {
     /// Run message handlers, pinger and other services
     async fn post_connection(
         &self,
-        mut ws_tx: WebSocketSink,
-        ws_rx: WebSocketStream,
+        stream: WebSocketStream,
         rx_nostr: &mut MutexGuard<'_, Receiver<JsonMessageItem>>,
     ) {
         // (Re)subscribe to relay
@@ -753,6 +743,9 @@ impl InnerRelay {
         }
 
         let ping: PingTracker = PingTracker::default();
+
+        // Split sink and stream
+        let (mut ws_tx, ws_rx) = stream.split();
 
         let (ingester_tx, ingester_rx) = mpsc::unbounded_channel();
 
@@ -791,7 +784,7 @@ impl InnerRelay {
 
     async fn sender_message_handler(
         &self,
-        ws_tx: &mut WebSocketSink,
+        ws_tx: &mut BoxWebSocketSink,
         rx_nostr: &mut MutexGuard<'_, Receiver<JsonMessageItem>>,
         ping: &PingTracker,
     ) -> Result<(), Error> {
@@ -809,7 +802,7 @@ impl InnerRelay {
                     tracing::debug!("Sending '{json}' to '{}' (size: {size} bytes)", self.url);
 
                     // Compose WebSocket text messages
-                    let msg: Message = Message::Text(json);
+                    let msg: WebSocketMessage = WebSocketMessage::Text(json);
 
                     // Send WebSocket messages
                     send_ws_msg(self.state.runtime(), ws_tx, msg).await?;
@@ -841,7 +834,7 @@ impl InnerRelay {
                         ping.set_replied(false);
 
                         // Compose ping message
-                        let msg = Message::Ping(nonce.to_be_bytes().to_vec());
+                        let msg = WebSocketMessage::Ping(Bytes::copy_from_slice(&nonce.to_be_bytes()));
 
                         // Send WebSocket message
                         send_ws_msg(self.state.runtime(), ws_tx, msg).await?;
@@ -862,7 +855,7 @@ impl InnerRelay {
 
     async fn receiver_message_handler(
         &self,
-        mut ws_rx: WebSocketStream,
+        mut ws_rx: BoxWebSocketStream,
         ping: &PingTracker,
         ingester_tx: mpsc::UnboundedSender<IngesterCommand>,
     ) -> Result<(), Error> {
@@ -871,14 +864,16 @@ impl InnerRelay {
 
         while let Some(msg) = ws_rx.next().await {
             match msg? {
-                Message::Text(json) => self.handle_relay_message(&json, &ingester_tx).await,
-                Message::Binary(_) => {
+                WebSocketMessage::Text(json) => {
+                    self.handle_relay_message(&json, &ingester_tx).await
+                }
+                WebSocketMessage::Binary(_) => {
                     tracing::warn!(url = %self.url, "Binary messages aren't supported.");
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                Message::Pong(bytes) => {
+                WebSocketMessage::Ping(..) => {}
+                WebSocketMessage::Pong(bytes) => {
                     if self.opts.ping && self.state.transport.support_ping() {
-                        match bytes.try_into() {
+                        match bytes.as_ref().try_into() {
                             Ok(nonce) => {
                                 // Nonce from big-endian bytes
                                 let nonce: u64 = u64::from_be_bytes(nonce);
@@ -907,15 +902,11 @@ impl InnerRelay {
                         }
                     }
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                Message::Close(None) => break,
-                #[cfg(not(target_arch = "wasm32"))]
-                Message::Close(Some(frame)) => {
+                WebSocketMessage::Close(None) => break,
+                WebSocketMessage::Close(Some(frame)) => {
                     tracing::info!(code = %frame.code, reason = %frame.reason, "Connection closed by peer.");
                     break;
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                _ => {}
             }
         }
 
@@ -1338,7 +1329,7 @@ impl InnerRelay {
 
                 // Send the item
                 self.atomic.channels.send_client_msg(JsonMessageItem {
-                    json: msg.as_json(),
+                    json: Utf8Bytes::from(msg.as_json()),
                     confirmation: Some(tx),
                 })?;
 
@@ -1346,7 +1337,7 @@ impl InnerRelay {
                 Ok(self.state.runtime().timeout(timeout, rx).await??)
             }
             None => self.atomic.channels.send_client_msg(JsonMessageItem {
-                json: msg.as_json(),
+                json: Utf8Bytes::from(msg.as_json()),
                 confirmation: None,
             }),
         }
@@ -1765,8 +1756,8 @@ impl InnerRelay {
 /// Send a WebSocket message with timeout set to [WEBSOCKET_TX_TIMEOUT].
 async fn send_ws_msg(
     runtime: &RuntimeWrapper,
-    tx: &mut WebSocketSink,
-    msg: Message,
+    tx: &mut BoxWebSocketSink,
+    msg: WebSocketMessage,
 ) -> Result<(), Error> {
     Ok(runtime
         .timeout(WEBSOCKET_TX_TIMEOUT, tx.send(msg))
@@ -1774,7 +1765,7 @@ async fn send_ws_msg(
 }
 
 /// Send the close message with timeout set to [WEBSOCKET_TX_TIMEOUT].
-async fn close_ws(runtime: &RuntimeWrapper, tx: &mut WebSocketSink) -> Result<(), Error> {
+async fn close_ws(runtime: &RuntimeWrapper, tx: &mut BoxWebSocketSink) -> Result<(), Error> {
     // TODO: remove timeout from here?
     Ok(runtime.timeout(WEBSOCKET_TX_TIMEOUT, tx.close()).await??)
 }

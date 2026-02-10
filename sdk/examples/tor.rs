@@ -1,8 +1,5 @@
-// Copyright (c) 2022-2023 Yuki Kishimoto
-// Copyright (c) 2023-2025 Rust Nostr Developers
-// Distributed under the MIT software license
-
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::Arc;
 
 use nostr_sdk::prelude::*;
 
@@ -13,13 +10,12 @@ async fn main() -> Result<()> {
     // Parse keys
     let keys = Keys::parse("nsec1ufnus6pju578ste3v90xd5m2decpuzpql2295m3sknqcjzyys9ls0qlc85")?;
 
-    // Configure client to use embedded tor for `.onion` relays
-    let connection: Connection = Connection::new()
-        .proxy(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9050)))
-        .target(ConnectionTarget::Onion);
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9050));
+    let transport =
+        Arc::new(TungsteniteWebSocketTransport::default().proxy(addr, ProxyTarget::Onion));
     let client = Client::builder()
         .signer(keys.clone())
-        .connection(connection)
+        .websocket_transport(transport)
         .build()?;
 
     // Add relays

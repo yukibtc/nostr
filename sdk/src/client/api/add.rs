@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::future::IntoFuture;
 use std::time::Duration;
 
-use async_wsocket::ConnectionMode;
 use nostr::types::url::{RelayUrl, RelayUrlArg};
 
 use crate::client::{Client, Error};
@@ -36,13 +35,6 @@ impl<'client, 'url> AddRelay<'client, 'url> {
     #[inline]
     pub fn capabilities(mut self, capabilities: RelayCapabilities) -> Self {
         self.capabilities = capabilities;
-        self
-    }
-
-    /// Set connection mode
-    #[inline]
-    pub fn connection_mode(mut self, mode: ConnectionMode) -> Self {
-        self.opts.connection_mode = mode;
         self
     }
 

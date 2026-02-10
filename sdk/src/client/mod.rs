@@ -9,13 +9,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
-use async_wsocket::ConnectionMode;
 use futures::StreamExt;
 use nostr::prelude::*;
 use nostr_database::prelude::*;
 use nostr_gossip::{GossipAllowedRelays, GossipListKind, GossipPublicKeyStatus, NostrGossip};
-use nostr_runtime::runtime::NostrRuntime;
+use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
 use tokio::sync::oneshot;
 
 mod api;
@@ -36,13 +35,11 @@ use crate::pool::{RelayPool, RelayPoolBuilder};
 use crate::relay::{
     Relay, RelayCapabilities, RelayLimits, RelayOptions, ReqExitPolicy, SyncDirection, SyncOptions,
 };
-use crate::runtime::RuntimeWrapper;
+use crate::runtime::{get_runtime, get_transport, RuntimeWrapper};
 use crate::stream::{BoxedStream, NotificationStream};
 
 #[derive(Debug, Clone)]
 struct ClientConfig {
-    #[cfg(not(target_arch = "wasm32"))]
-    connection: Connection,
     gossip_limits: GossipRelayLimits,
     gossip_allowed: GossipAllowedRelays,
     relay_limits: RelayLimits,
@@ -60,8 +57,12 @@ pub struct Client {
     config: ClientConfig,
 }
 
-#[cfg(feature = "runtime-tokio")]
 impl Default for Client {
+    /// Get a default nostr client
+    ///
+    /// # Panics
+    ///
+    /// Panics if no runtime is configured or installed.
     #[inline]
     fn default() -> Self {
         Self::new()
@@ -73,7 +74,6 @@ impl Client {
     ///
     /// Use the [`Client::builder`] to configure the client (i.e., set a signer).
     #[inline]
-    #[cfg(feature = "runtime-tokio")]
     pub fn new() -> Self {
         Self::builder().build().expect("failed to build client")
     }
@@ -95,7 +95,14 @@ impl Client {
     }
 
     fn from_builder(builder: ClientBuilder) -> Result<Self, Error> {
-        let runtime: Arc<dyn NostrRuntime> = builder.runtime.ok_or(Error::RuntimeNotConfigured)?;
+        // Get runtime and transport
+        let runtime: Arc<dyn NostrRuntime> =
+            get_runtime(builder.runtime).ok_or(Error::RuntimeNotConfigured)?;
+        let websocket_transport: Arc<dyn NostrWebSocketTransport> =
+            get_transport(&runtime, builder.websocket_transport)
+                .ok_or(Error::WebSocketTransportNotConfigured)?;
+
+        // Wrap runtime
         let runtime: RuntimeWrapper = RuntimeWrapper::new(runtime);
 
         // Construct admission policy middleware
@@ -107,7 +114,7 @@ impl Client {
         // Construct relay pool builder
         let pool_builder: RelayPoolBuilder = RelayPoolBuilder {
             runtime: runtime.clone(),
-            websocket_transport: builder.websocket_transport,
+            websocket_transport,
             admit_policy: Some(Arc::new(admit_policy_wrapper)),
             monitor: builder.monitor,
             database: builder.database,
@@ -124,8 +131,6 @@ impl Client {
                 .gossip
                 .map(|gossip| Gossip::new(runtime.clone(), gossip)),
             config: ClientConfig {
-                #[cfg(not(target_arch = "wasm32"))]
-                connection: builder.connection,
                 gossip_limits: builder.gossip_limits,
                 gossip_allowed: builder.gossip_allowed,
                 relay_limits: builder.relay_limits,
@@ -271,24 +276,6 @@ impl Client {
 
     fn compose_relay_opts<'a>(&self, _url: &'a RelayUrlArg<'a>) -> RelayOptions {
         let mut opts: RelayOptions = RelayOptions::new();
-
-        // Set connection mode
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Ok(url) = _url.try_as_relay_url() {
-            match &self.config.connection.mode {
-                ConnectionMode::Direct => {}
-                ConnectionMode::Proxy(..) => match self.config.connection.target {
-                    ConnectionTarget::All => {
-                        opts = opts.connection_mode(self.config.connection.mode.clone());
-                    }
-                    ConnectionTarget::Onion => {
-                        if url.is_onion() {
-                            opts = opts.connection_mode(self.config.connection.mode.clone())
-                        }
-                    }
-                },
-            };
-        }
 
         // Set sleep when idle
         match self.config.sleep_when_idle {

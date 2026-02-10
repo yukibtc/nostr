@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_wsocket::ConnectionMode;
 use futures::StreamExt;
 use nostr_database::prelude::*;
 use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
 use tokio::sync::{broadcast, oneshot};
 
 mod api;
@@ -36,7 +36,7 @@ pub use self::options::*;
 pub use self::stats::*;
 pub use self::status::*;
 use crate::client::ClientNotification;
-use crate::runtime::RuntimeWrapper;
+use crate::runtime::{get_runtime, RuntimeWrapper};
 use crate::shared::SharedState;
 use crate::stream::{BoxedStream, NotificationStream};
 
@@ -126,13 +126,20 @@ impl Relay {
     }
 
     fn from_builder(builder: RelayBuilder) -> Result<Self, Error> {
-        let runtime: Arc<dyn NostrRuntime> = builder.runtime.ok_or(Error::RuntimeNotConfigured)?;
+        let runtime: Arc<dyn NostrRuntime> =
+            get_runtime(builder.runtime).ok_or(Error::RuntimeNotConfigured)?;
+
+        // Transport
+        let websocket_transport: Arc<dyn NostrWebSocketTransport> = builder
+            .websocket_transport
+            .ok_or(Error::WebSocketTransportNotConfigured)?;
+
         let runtime: RuntimeWrapper = RuntimeWrapper::new(runtime);
 
         let state: SharedState = SharedState::new(
             runtime,
             builder.database,
-            builder.websocket_transport,
+            websocket_transport,
             builder.signer,
             builder.admit_policy,
             false,
@@ -149,12 +156,6 @@ impl Relay {
     #[inline]
     pub fn url(&self) -> &RelayUrl {
         &self.inner.url
-    }
-
-    /// Get connection mode
-    #[inline]
-    pub fn connection_mode(&self) -> &ConnectionMode {
-        self.inner.connection_mode()
     }
 
     /// Get status

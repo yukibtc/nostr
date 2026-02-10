@@ -7,12 +7,12 @@ use std::sync::Arc;
 use lru::LruCache;
 use nostr::{EventId, NostrSigner};
 use nostr_database::NostrDatabase;
+use nostr_transport::prelude::*;
 use tokio::sync::Mutex;
 
 use crate::monitor::Monitor;
 use crate::policy::AdmitPolicy;
 use crate::runtime::RuntimeWrapper;
-use crate::transport::websocket::WebSocketTransport;
 
 // LruCache pre-allocate, so keep this at a reasonable value.
 // A good value may be <= 128k, considering that stored values are the 64-bit hashes of the event IDs.
@@ -22,7 +22,7 @@ const MAX_VERIFICATION_CACHE_SIZE: usize = 128_000;
 pub(crate) struct SharedState {
     runtime: RuntimeWrapper,
     pub(crate) database: Arc<dyn NostrDatabase>,
-    pub(crate) transport: Arc<dyn WebSocketTransport>,
+    pub(crate) transport: Arc<dyn NostrWebSocketTransport>,
     signer: Option<Arc<dyn NostrSigner>>,
     nip42_auto_authentication: Arc<AtomicBool>,
     verification_cache: Arc<Mutex<LruCache<u64, ()>>>,
@@ -34,7 +34,7 @@ impl SharedState {
     pub(crate) fn new(
         runtime: RuntimeWrapper,
         database: Arc<dyn NostrDatabase>,
-        transport: Arc<dyn WebSocketTransport>,
+        transport: Arc<dyn NostrWebSocketTransport>,
         signer: Option<Arc<dyn NostrSigner>>,
         admit_policy: Option<Arc<dyn AdmitPolicy>>,
         nip42_auto_authentication: bool,

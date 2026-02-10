@@ -6,11 +6,13 @@ use nostr::signer::{IntoNostrSigner, NostrSigner};
 use nostr::RelayUrl;
 use nostr_database::{IntoNostrDatabase, MemoryDatabase, NostrDatabase};
 use nostr_runtime::prelude::*;
+use nostr_transport::prelude::*;
+#[cfg(feature = "transport-tungstenite")]
+use nostr_transport_tungstenite::prelude::*;
 
 use super::options::RelayOptions;
 use super::{Error, Relay, RelayCapabilities};
 use crate::policy::AdmitPolicy;
-use crate::transport::websocket::{DefaultWebsocketTransport, WebSocketTransport};
 
 /// Relay builder
 #[derive(Debug, Clone)]
@@ -20,7 +22,7 @@ pub struct RelayBuilder {
     /// Nostr Runtime
     pub runtime: Option<Arc<dyn NostrRuntime>>,
     /// WebSocket transport
-    pub websocket_transport: Arc<dyn WebSocketTransport>,
+    pub websocket_transport: Option<Arc<dyn NostrWebSocketTransport>>,
     /// Nostr Signer
     pub signer: Option<Arc<dyn NostrSigner>>,
     /// Database
@@ -39,14 +41,8 @@ impl RelayBuilder {
     pub fn new(url: RelayUrl) -> Self {
         Self {
             url,
-            #[cfg(feature = "runtime-tokio")]
-            runtime: match TokioRuntime::try_current() {
-                Ok(runtime) => Some(Arc::new(runtime)),
-                Err(_) => None,
-            },
-            #[cfg(not(feature = "runtime-tokio"))]
             runtime: None,
-            websocket_transport: Arc::new(DefaultWebsocketTransport),
+            websocket_transport: None,
             signer: None,
             database: Arc::new(MemoryDatabase::default()),
             admit_policy: None,
@@ -55,13 +51,23 @@ impl RelayBuilder {
         }
     }
 
+    /// Set a runtime
+    #[inline]
+    pub fn runtime<T>(mut self, runtime: Arc<T>) -> Self
+    where
+        T: NostrRuntime,
+    {
+        self.runtime = Some(runtime);
+        self
+    }
+
     /// Set a WebSocket transport
     #[inline]
-    pub fn websocket_transport<T>(mut self, transport: T) -> Self
+    pub fn websocket_transport<T>(mut self, transport: Arc<T>) -> Self
     where
-        T: WebSocketTransport + 'static,
+        T: NostrWebSocketTransport,
     {
-        self.websocket_transport = Arc::new(transport);
+        self.websocket_transport = Some(transport);
         self
     }
 

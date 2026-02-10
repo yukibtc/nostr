@@ -30,6 +30,10 @@ members = [
     "signer/nostr-browser-signer",
     "signer/nostr-browser-signer-proxy",
     "signer/nostr-connect",
+
+    # Transports
+    "transport/nostr-transport",
+    "transport/nostr-transport-tungstenite",
 ]
 default-members = ["crates/*"]
 resolver = "2"
@@ -39,7 +43,7 @@ authors = ["Yuki Kishimoto <yukikishimoto@protonmail.com>", "Rust Nostr Develope
 homepage = "https://github.com/rust-nostr/nostr"
 repository = "https://github.com/rust-nostr/nostr.git"
 license = "MIT"
-rust-version = "1.70.0"
+rust-version = "1.85.0"
 
 [workspace.dependencies]
 async-utility = "0.3"
@@ -47,6 +51,7 @@ async-wsocket = {  git = "https://github.com/shadowylab/async-wsocket", rev = "0
 atomic-destructor = { version = "0.3", default-features = false }
 base64 = { version = "0.22", default-features = false }
 clap = "=4.4.18"
+futures = "0.3"
 hex = { version = "0.4", default-features = false }
 lru = { version = "0.16", default-features = false }
 negentropy = { version = "0.5", default-features = false }
@@ -63,6 +68,8 @@ nostr-ndb = { version = "0.44", path = "./database/nostr-ndb", default-features 
 nostr-relay-builder = { version = "0.44", path = "./crates/nostr-relay-builder", default-features = false }
 nostr-runtime = { version = "0.44", path = "./runtime", default-features = false }
 nostr-sdk = { version = "0.44", path = "./sdk", default-features = false }
+nostr-transport = { version = "0.44", path = "./transport/nostr-transport", default-features = false }
+nostr-transport-tungstenite = { version = "0.44", path = "./transport/nostr-transport-tungstenite", default-features = false }
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false }

@@ -4,7 +4,6 @@ use std::time::Duration;
 use crate::future::BoxedFuture;
 use crate::policy::AdmitStatus;
 use crate::relay::{Error, Relay, RelayStatus};
-use crate::transport::websocket::{WebSocketSink, WebSocketStream};
 
 /// Try to connect relay
 #[must_use = "Does nothing unless you await!"]
@@ -64,7 +63,7 @@ impl<'relay> IntoFuture for TryConnect<'relay> {
 
             // Try to connect
             // This will set the status to "terminated" if the connection fails
-            let stream: (WebSocketSink, WebSocketStream) = self
+            let stream = self
                 .relay
                 .inner
                 ._try_connect(self.timeout, RelayStatus::Terminated)
