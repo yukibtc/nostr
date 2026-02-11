@@ -6,7 +6,7 @@ use nostr::nips::nip47::NostrWalletConnectUri;
 use nostr_sdk::monitor::Monitor;
 use nostr_sdk::relay::RelayOptions;
 
-use crate::NostrWalletConnect;
+use crate::{Error, NostrWalletConnect};
 
 /// Default timeout
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -60,7 +60,7 @@ impl NostrWalletConnectBuilder {
 
     /// Build [`NostrWalletConnect`] client.
     #[inline]
-    pub fn build(self) -> NostrWalletConnect {
+    pub fn build(self) -> Result<NostrWalletConnect, Error> {
         NostrWalletConnect::from_builder(self)
     }
 }

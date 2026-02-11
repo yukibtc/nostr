@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     let keys = Keys::parse("nsec1ufnus6pju578ste3v90xd5m2decpuzpql2295m3sknqcjzyys9ls0qlc85")?;
     let gossip = NostrGossipMemory::unbounded();
-    let client = Client::builder().signer(keys).gossip(gossip).build();
+    let client = Client::builder().signer(keys).gossip(gossip).build()?;
 
     // Add discovery relays
     client

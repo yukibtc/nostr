@@ -80,9 +80,9 @@ impl<'relay> IntoFuture for TryConnect<'relay> {
 
 #[cfg(test)]
 mod tests {
-    use async_utility::time;
     use nostr::RelayUrl;
     use nostr_relay_builder::prelude::*;
+    use tokio::time;
 
     use super::{Error, *};
 

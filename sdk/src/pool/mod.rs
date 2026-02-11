@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::vec::IntoIter;
 
-use async_utility::task;
 use futures::{future, StreamExt};
 use nostr_database::prelude::*;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
@@ -62,6 +61,7 @@ impl RelayPool {
 
         Self {
             state: SharedState::new(
+                builder.runtime,
                 builder.database,
                 builder.websocket_transport,
                 builder.signer,
@@ -773,7 +773,7 @@ impl RelayPool {
             urls.into_iter().zip(awaited.into_iter());
 
         // Single driver task: polls all streams, de-duplicates, forwards
-        task::spawn(async move {
+        self.state().runtime().spawn_boxed(Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             type OutFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
             #[cfg(target_arch = "wasm32")]
@@ -833,7 +833,7 @@ impl RelayPool {
 
             // Close the channel
             drop(tx);
-        });
+        }));
 
         // Return stream
         Ok(Box::pin(ReceiverStream::new(rx)))

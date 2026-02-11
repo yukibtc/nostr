@@ -9,9 +9,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use async_utility::futures_util::stream::SplitSink;
 use async_wsocket::futures_util::{Sink, SinkExt, StreamExt, TryStreamExt};
 use async_wsocket::{ConnectionMode, Message, WebSocket};
+use futures::stream::SplitSink;
 use nostr::Url;
 
 use super::error::TransportError;

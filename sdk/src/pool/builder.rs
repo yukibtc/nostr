@@ -6,9 +6,11 @@ use nostr_database::NostrDatabase;
 use super::RelayPool;
 use crate::monitor::Monitor;
 use crate::policy::AdmitPolicy;
+use crate::runtime::RuntimeWrapper;
 use crate::transport::websocket::WebSocketTransport;
 
 pub(crate) struct RelayPoolBuilder {
+    pub(crate) runtime: RuntimeWrapper,
     pub(crate) websocket_transport: Arc<dyn WebSocketTransport>,
     pub(crate) admit_policy: Option<Arc<dyn AdmitPolicy>>,
     pub(crate) monitor: Option<Monitor>,

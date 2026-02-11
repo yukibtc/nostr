@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::future::IntoFuture;
 use std::time::Instant;
 
-use async_utility::time;
 use negentropy::{Id, Negentropy, NegentropyStorageVector};
 use nostr::{ClientMessage, EventId, Filter, RelayMessage, SubscriptionId, Timestamp};
+use nostr_runtime::prelude::*;
 use tokio::sync::broadcast;
 
 use crate::future::BoxedFuture;
@@ -15,6 +15,7 @@ use crate::relay::constants::{
     NEGENTROPY_LOW_WATER_UP,
 };
 use crate::relay::{Error, Relay, RelayNotification, SyncOptions};
+use crate::runtime::RuntimeWrapper;
 
 /// Relay negentropy reconciliation summary
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -330,7 +331,13 @@ pub(super) async fn sync(
     relay.send_msg(open_msg).await?;
 
     // Check if negentropy is supported
-    check_negentropy_support(&sub_id, opts, &mut temp_notifications).await?;
+    check_negentropy_support(
+        relay.inner.state.runtime(),
+        &sub_id,
+        opts,
+        &mut temp_notifications,
+    )
+    .await?;
 
     let mut in_flight_up: HashSet<EventId> = HashSet::new();
     let mut in_flight_down: bool = false;
@@ -520,58 +527,61 @@ fn prepare_negentropy_storage(
 /// Check if negentropy is supported
 #[inline(never)]
 async fn check_negentropy_support(
+    runtime: &RuntimeWrapper,
     sub_id: &SubscriptionId,
     opts: &SyncOptions,
     temp_notifications: &mut broadcast::Receiver<RelayNotification>,
-) -> nostr::Result<(), Error> {
-    time::timeout(Some(opts.initial_timeout), async {
-        while let Ok(notification) = temp_notifications.recv().await {
-            if let RelayNotification::Message { message } = notification {
-                match message {
-                    RelayMessage::NegMsg {
-                        subscription_id, ..
-                    } => {
-                        if subscription_id.as_ref() == sub_id {
-                            break;
+) -> Result<(), Error> {
+    runtime
+        .timeout(opts.initial_timeout, async {
+            while let Ok(notification) = temp_notifications.recv().await {
+                if let RelayNotification::Message { message } = notification {
+                    match message {
+                        RelayMessage::NegMsg {
+                            subscription_id, ..
+                        } => {
+                            if subscription_id.as_ref() == sub_id {
+                                break;
+                            }
                         }
-                    }
-                    RelayMessage::NegErr {
-                        subscription_id,
-                        message,
-                    } => {
-                        if subscription_id.as_ref() == sub_id {
-                            return Err(Error::RelayMessage(message.into_owned()));
+                        RelayMessage::NegErr {
+                            subscription_id,
+                            message,
+                        } => {
+                            if subscription_id.as_ref() == sub_id {
+                                return Err(Error::RelayMessage(message.into_owned()));
+                            }
                         }
-                    }
-                    RelayMessage::Notice(message) => {
-                        if message == "ERROR: negentropy error: negentropy query missing elements" {
-                            // The NEG-OPEN message is sent with 4 elements instead of 5
-                            // If the relay return this error means that is not support new
-                            // negentropy protocol
-                            return Err(Error::Negentropy(
-                                negentropy::Error::UnsupportedProtocolVersion,
-                            ));
-                        } else if message.contains("bad msg")
-                            && (message.contains("unknown cmd")
-                                || message.contains("negentropy")
-                                || message.contains("NEG-"))
-                        {
-                            return Err(Error::NegentropyNotSupported);
-                        } else if message.contains("bad msg: invalid message")
-                            && message.contains("NEG-OPEN")
-                        {
-                            return Err(Error::UnknownNegentropyError);
+                        RelayMessage::Notice(message) => {
+                            if message
+                                == "ERROR: negentropy error: negentropy query missing elements"
+                            {
+                                // The NEG-OPEN message is sent with 4 elements instead of 5
+                                // If the relay return this error means that is not support new
+                                // negentropy protocol
+                                return Err(Error::Negentropy(
+                                    negentropy::Error::UnsupportedProtocolVersion,
+                                ));
+                            } else if message.contains("bad msg")
+                                && (message.contains("unknown cmd")
+                                    || message.contains("negentropy")
+                                    || message.contains("NEG-"))
+                            {
+                                return Err(Error::NegentropyNotSupported);
+                            } else if message.contains("bad msg: invalid message")
+                                && message.contains("NEG-OPEN")
+                            {
+                                return Err(Error::UnknownNegentropyError);
+                            }
                         }
+                        _ => (),
                     }
-                    _ => (),
                 }
             }
-        }
 
-        Ok(())
-    })
-    .await
-    .ok_or(Error::Timeout)?
+            Ok(())
+        })
+        .await?
 }
 
 impl<'relay> IntoFuture for SyncEvents<'relay> {
@@ -655,7 +665,10 @@ mod tests {
         assert_eq!(database.count(Filter::new()).await.unwrap(), 3);
 
         // Relay
-        let relay = Relay::builder(url).database(database.clone()).build();
+        let relay = Relay::builder(url)
+            .database(database.clone())
+            .build()
+            .unwrap();
 
         // Connect
         relay

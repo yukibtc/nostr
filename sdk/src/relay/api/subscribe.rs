@@ -140,10 +140,10 @@ impl<'relay> IntoFuture for Subscribe<'relay> {
 mod tests {
     use std::time::Duration;
 
-    use async_utility::time;
     use futures::StreamExt;
     use nostr::{Event, EventBuilder, EventId, Keys, Kind};
     use nostr_relay_builder::prelude::*;
+    use tokio::time;
 
     use super::*;
     use crate::prelude::RelayNotification;
@@ -165,7 +165,8 @@ mod tests {
                     .verify_subscriptions(true)
                     .ban_relay_on_mismatch(true),
             )
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(relay.status(), RelayStatus::Initialized);
 

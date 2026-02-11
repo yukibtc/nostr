@@ -461,7 +461,7 @@ mod tests {
 
         // Configure client with gossip
         let gossip: NostrGossipMemory = NostrGossipMemory::unbounded();
-        let client: Client = Client::builder().gossip(gossip).build();
+        let client: Client = Client::builder().gossip(gossip).build().unwrap();
 
         // Add 2 READ and WRITE relays
         client.add_relay(&url1).await.unwrap();
@@ -530,7 +530,8 @@ mod tests {
                 local: true,
                 without_tls: true,
             })
-            .build();
+            .build()
+            .unwrap();
 
         // The client only knows about the Discovery and Public relays initially
         client
@@ -627,7 +628,8 @@ mod tests {
                 local: true,
                 without_tls: true,
             })
-            .build();
+            .build()
+            .unwrap();
 
         // The client only knows about the Discovery and Public relays initially
         client

@@ -15,6 +15,10 @@ keywords = ["nostr", "signer", "nip46", "nostr-connect"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+default = ["runtime-tokio"]
+runtime-tokio = ["nostr-sdk/runtime-tokio"]
+
 [dependencies]
 async-utility.workspace = true
 futures-core = "0.3"

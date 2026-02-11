@@ -4,6 +4,7 @@ use std::time::Duration;
 use nostr::event::{self, builder};
 use nostr::message::MessageHandleError;
 use nostr_database::DatabaseError;
+use nostr_runtime::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::policy::PolicyError;
@@ -30,6 +31,8 @@ pub enum Error {
     Negentropy(negentropy::Error),
     /// Oneshot recv error
     OneshotRecv(oneshot::error::RecvError),
+    /// Runtime not configured
+    RuntimeNotConfigured,
     /// Signer not configured
     SignerNotConfigured,
     /// Generic timeout
@@ -137,6 +140,7 @@ impl fmt::Display for Error {
             Self::Hex(e) => e.fmt(f),
             Self::Negentropy(e) => e.fmt(f),
             Self::OneshotRecv(e) => e.fmt(f),
+            Self::RuntimeNotConfigured => write!(f, "runtime not configured"),
             Self::SignerNotConfigured => f.write_str("signer not configured"),
             Self::Timeout => f.write_str("timeout"),
             Self::NotRepliedToPing => f.write_str("not replied to ping"),
@@ -247,5 +251,11 @@ impl From<negentropy::Error> for Error {
 impl From<oneshot::error::RecvError> for Error {
     fn from(e: oneshot::error::RecvError) -> Self {
         Self::OneshotRecv(e)
+    }
+}
+
+impl From<TimeoutError> for Error {
+    fn from(_e: TimeoutError) -> Self {
+        Self::Timeout
     }
 }

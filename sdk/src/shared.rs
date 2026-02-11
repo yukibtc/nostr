@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::monitor::Monitor;
 use crate::policy::AdmitPolicy;
+use crate::runtime::RuntimeWrapper;
 use crate::transport::websocket::WebSocketTransport;
 
 // LruCache pre-allocate, so keep this at a reasonable value.
@@ -19,6 +20,7 @@ const MAX_VERIFICATION_CACHE_SIZE: usize = 128_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SharedState {
+    runtime: RuntimeWrapper,
     pub(crate) database: Arc<dyn NostrDatabase>,
     pub(crate) transport: Arc<dyn WebSocketTransport>,
     signer: Option<Arc<dyn NostrSigner>>,
@@ -30,6 +32,7 @@ pub(crate) struct SharedState {
 
 impl SharedState {
     pub(crate) fn new(
+        runtime: RuntimeWrapper,
         database: Arc<dyn NostrDatabase>,
         transport: Arc<dyn WebSocketTransport>,
         signer: Option<Arc<dyn NostrSigner>>,
@@ -42,6 +45,7 @@ impl SharedState {
                 .expect("MAX_VERIFICATION_CACHE_SIZE must be greater than 0");
 
         Self {
+            runtime,
             database,
             transport,
             signer,
@@ -60,6 +64,11 @@ impl SharedState {
     pub(crate) fn automatic_authentication(&self, enable: bool) {
         self.nip42_auto_authentication
             .store(enable, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub(crate) fn runtime(&self) -> &RuntimeWrapper {
+        &self.runtime
     }
 
     #[inline]

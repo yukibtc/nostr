@@ -3,6 +3,8 @@ use std::sync::Arc;
 use nostr::{Alphabet, Filter, Kind, SingleLetterTag};
 use nostr_gossip::NostrGossip;
 
+use crate::runtime::RuntimeWrapper;
+
 mod resolver;
 mod semaphore;
 
@@ -52,11 +54,11 @@ pub(super) struct Gossip {
 
 impl Gossip {
     #[inline]
-    pub(super) fn new(gossip: Arc<dyn NostrGossip>) -> Self {
+    pub(super) fn new(runtime: RuntimeWrapper, gossip: Arc<dyn NostrGossip>) -> Self {
         Self {
             store: gossip.clone(),
             resolver: GossipRelayResolver::new(gossip),
-            semaphore: GossipSemaphore::new(),
+            semaphore: GossipSemaphore::new(runtime),
         }
     }
 

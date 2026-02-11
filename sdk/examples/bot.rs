@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     let client = Client::builder()
         .signer(keys.clone())
         .gossip(gossip)
-        .build();
+        .build()?;
 
     println!("Bot public key: {}", keys.public_key().to_bech32()?);
 

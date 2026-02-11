@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     filtering.muted_public_keys.insert(muted_public_key);
 
     // Init client
-    let client = Client::builder().admit_policy(filtering).build();
+    let client = Client::builder().admit_policy(filtering).build()?;
     client.add_relay("wss://relay.damus.io").await?;
     client.connect().await;
 

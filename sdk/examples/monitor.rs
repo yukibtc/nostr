@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let monitor = Monitor::new(4096);
-    let client = Client::builder().monitor(monitor).build();
+    let client = Client::builder().monitor(monitor).build()?;
 
     // Subscribe to monitor notifications
     let mut notifications = client.monitor().unwrap().subscribe();

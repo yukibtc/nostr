@@ -15,6 +15,7 @@ use futures::StreamExt;
 use nostr::prelude::*;
 use nostr_database::prelude::*;
 use nostr_gossip::{GossipAllowedRelays, GossipListKind, GossipPublicKeyStatus, NostrGossip};
+use nostr_runtime::runtime::NostrRuntime;
 use tokio::sync::oneshot;
 
 mod api;
@@ -35,6 +36,7 @@ use crate::pool::{RelayPool, RelayPoolBuilder};
 use crate::relay::{
     Relay, RelayCapabilities, RelayLimits, RelayOptions, ReqExitPolicy, SyncDirection, SyncOptions,
 };
+use crate::runtime::RuntimeWrapper;
 use crate::stream::{BoxedStream, NotificationStream};
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ pub struct Client {
     config: ClientConfig,
 }
 
+#[cfg(feature = "runtime-tokio")]
 impl Default for Client {
     #[inline]
     fn default() -> Self {
@@ -70,8 +73,9 @@ impl Client {
     ///
     /// Use the [`Client::builder`] to configure the client (i.e., set a signer).
     #[inline]
+    #[cfg(feature = "runtime-tokio")]
     pub fn new() -> Self {
-        Self::builder().build()
+        Self::builder().build().expect("failed to build client")
     }
 
     /// Construct client
@@ -83,14 +87,17 @@ impl Client {
     /// use nostr_sdk::prelude::*;
     ///
     /// let signer = Keys::generate();
-    /// let client: Client = Client::builder().signer(signer).build();
+    /// let client: Client = Client::builder().signer(signer).build().unwrap();
     /// ```
     #[inline]
     pub fn builder() -> ClientBuilder {
         ClientBuilder::default()
     }
 
-    fn from_builder(builder: ClientBuilder) -> Self {
+    fn from_builder(builder: ClientBuilder) -> Result<Self, Error> {
+        let runtime: Arc<dyn NostrRuntime> = builder.runtime.ok_or(Error::RuntimeNotConfigured)?;
+        let runtime: RuntimeWrapper = RuntimeWrapper::new(runtime);
+
         // Construct admission policy middleware
         let admit_policy_wrapper = AdmissionPolicyMiddleware {
             gossip: builder.gossip.clone(),
@@ -99,6 +106,7 @@ impl Client {
 
         // Construct relay pool builder
         let pool_builder: RelayPoolBuilder = RelayPoolBuilder {
+            runtime: runtime.clone(),
             websocket_transport: builder.websocket_transport,
             admit_policy: Some(Arc::new(admit_policy_wrapper)),
             monitor: builder.monitor,
@@ -110,9 +118,11 @@ impl Client {
         };
 
         // Construct client
-        Self {
+        Ok(Self {
             pool: Arc::new(pool_builder.build()),
-            gossip: builder.gossip.map(Gossip::new),
+            gossip: builder
+                .gossip
+                .map(|gossip| Gossip::new(runtime.clone(), gossip)),
             config: ClientConfig {
                 #[cfg(not(target_arch = "wasm32"))]
                 connection: builder.connection,
@@ -124,7 +134,7 @@ impl Client {
                 verify_subscriptions: builder.verify_subscriptions,
                 ban_relay_on_mismatch: builder.ban_relay_on_mismatch,
             },
-        }
+        })
     }
 
     /// Get current nostr signer

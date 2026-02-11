@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     let connection: Connection = Connection::new()
         .proxy(addr) // Use `.embedded_tor()` instead to enable the embedded tor client (require `tor` feature)
         .target(ConnectionTarget::Onion);
-    let client = Client::builder().signer(keys).connection(connection).build();
+    let client = Client::builder().signer(keys).connection(connection).build()?;
 
     // Add relays
     client.add_relay("wss://relay.damus.io").await?;
@@ -76,6 +76,14 @@ AR="${LLVM_PATH}/bin/llvm-ar" CC="${LLVM_PATH}/bin/clang" cargo build --target w
 ```
 
 NOTE: Currently `nip03` feature not support WASM.
+
+## Crate Feature Flags
+
+The following crate feature flags are available:
+
+| Feature            | Default | Description                                                   |
+|--------------------|:-------:|---------------------------------------------------------------|
+| `runtime-tokio`    |   Yes   | Enable tokio runtime                                          |
 
 ## Changelog
 

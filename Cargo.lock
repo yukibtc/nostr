@@ -1982,7 +1982,6 @@ dependencies = [
 name = "nostr-sdk"
 version = "0.44.1"
 dependencies = [
- "async-utility",
  "async-wsocket",
  "futures",
  "hex",
@@ -1996,6 +1995,7 @@ dependencies = [
  "nostr-lmdb",
  "nostr-ndb",
  "nostr-relay-builder",
+ "nostr-runtime",
  "tokio",
  "tokio-stream",
  "tracing",

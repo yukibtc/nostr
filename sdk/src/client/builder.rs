@@ -15,8 +15,9 @@ use nostr::signer::{IntoNostrSigner, NostrSigner};
 use nostr_database::memory::MemoryDatabase;
 use nostr_database::{IntoNostrDatabase, NostrDatabase};
 use nostr_gossip::{GossipAllowedRelays, IntoNostrGossip, NostrGossip};
+use nostr_runtime::runtime::*;
 
-use crate::client::Client;
+use crate::client::{Client, Error};
 use crate::monitor::Monitor;
 use crate::policy::AdmitPolicy;
 use crate::prelude::RelayLimits;
@@ -56,6 +57,8 @@ impl Default for GossipRelayLimits {
 /// Client builder
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
+    /// Nostr Runtime
+    pub runtime: Option<Arc<dyn NostrRuntime>>,
     /// Nostr Signer
     pub signer: Option<Arc<dyn NostrSigner>>,
     /// WebSocket transport
@@ -96,6 +99,15 @@ pub struct ClientBuilder {
 impl Default for ClientBuilder {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "runtime-tokio")]
+            // Try to get runtime from current handle
+            runtime: match TokioRuntime::try_current() {
+                Ok(runtime) => Some(Arc::new(runtime)),
+                // Try to create a new runtime
+                Err(_) => None,
+            },
+            #[cfg(not(feature = "runtime-tokio"))]
+            runtime: None,
             signer: None,
             websocket_transport: Arc::new(DefaultWebsocketTransport),
             admit_policy: None,
@@ -123,6 +135,28 @@ impl ClientBuilder {
     #[inline]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set a runtime
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use nostr_sdk::prelude::*;
+    /// # async fn exec() -> Result<()> {
+    /// // Create a new runtime
+    /// let runtime = Arc::new(TokioRuntime::new()?);
+    ///
+    /// // Set it to the builder
+    /// let client = Client::builder().runtime(runtime).build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline]
+    pub fn runtime(mut self, runtime: Arc<dyn NostrRuntime>) -> Self {
+        self.runtime = Some(runtime.into());
+        self
     }
 
     /// Set signer
@@ -277,7 +311,7 @@ impl ClientBuilder {
 
     /// Build [`Client`]
     #[inline]
-    pub fn build(self) -> Client {
+    pub fn build(self) -> Result<Client, Error> {
         Client::from_builder(self)
     }
 }

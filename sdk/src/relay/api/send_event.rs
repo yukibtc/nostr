@@ -2,13 +2,14 @@ use std::borrow::Cow;
 use std::future::IntoFuture;
 use std::time::Duration;
 
-use async_utility::time;
 use nostr::message::MachineReadablePrefix;
 use nostr::{ClientMessage, Event, EventId};
+use nostr_runtime::prelude::*;
 use tokio::sync::broadcast;
 
 use crate::future::BoxedFuture;
 use crate::relay::{Error, Relay, RelayNotification};
+use crate::runtime::RuntimeWrapper;
 
 /// Send event to relay
 #[must_use = "Does nothing unless you await!"]
@@ -62,31 +63,32 @@ impl<'relay, 'event> SendEvent<'relay, 'event> {
 }
 
 async fn wait_for_authentication(
+    runtime: &RuntimeWrapper,
     notifications: &mut broadcast::Receiver<RelayNotification>,
     timeout: Duration,
 ) -> Result<(), Error> {
-    time::timeout(Some(timeout), async {
-        while let Ok(notification) = notifications.recv().await {
-            match notification {
-                RelayNotification::Authenticated => {
-                    return Ok(());
-                }
-                RelayNotification::AuthenticationFailed => {
-                    return Err(Error::AuthenticationFailed);
-                }
-                RelayNotification::RelayStatus { status } => {
-                    if status.is_disconnected() {
-                        return Err(Error::NotConnected);
+    runtime
+        .timeout(timeout, async {
+            while let Ok(notification) = notifications.recv().await {
+                match notification {
+                    RelayNotification::Authenticated => {
+                        return Ok(());
                     }
+                    RelayNotification::AuthenticationFailed => {
+                        return Err(Error::AuthenticationFailed);
+                    }
+                    RelayNotification::RelayStatus { status } => {
+                        if status.is_disconnected() {
+                            return Err(Error::NotConnected);
+                        }
+                    }
+                    _ => (),
                 }
-                _ => (),
             }
-        }
 
-        Err(Error::PrematureExit)
-    })
-    .await
-    .ok_or(Error::Timeout)?
+            Err(Error::PrematureExit)
+        })
+        .await?
 }
 
 impl<'relay, 'event> IntoFuture for SendEvent<'relay, 'event>
@@ -121,6 +123,7 @@ where
                 {
                     // Wait that relay authenticate
                     wait_for_authentication(
+                        self.relay.inner.state.runtime(),
                         &mut notifications,
                         self.wait_for_authentication_timeout,
                     )
@@ -238,7 +241,7 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
 
-        let relay: Relay = Relay::builder(url).signer(keys).build();
+        let relay: Relay = Relay::builder(url).signer(keys).build().unwrap();
 
         relay.connect();
 

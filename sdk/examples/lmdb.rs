@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     let client: Client = ClientBuilder::default()
         .signer(keys.clone())
         .database(database)
-        .build();
+        .build()?;
 
     client.add_relay("wss://relay.damus.io").await?;
     client.add_relay("wss://nostr.wine").await?;

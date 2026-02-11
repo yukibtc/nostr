@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let limits = RelayLimits::disable();
 
     // Compose options and limits
-    let client = Client::builder().relay_limits(limits).build();
+    let client = Client::builder().relay_limits(limits).build()?;
 
     // Add relays and connect
     client.add_relay("wss://relay.damus.io").await?;

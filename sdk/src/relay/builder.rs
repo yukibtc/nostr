@@ -5,9 +5,10 @@ use std::sync::Arc;
 use nostr::signer::{IntoNostrSigner, NostrSigner};
 use nostr::RelayUrl;
 use nostr_database::{IntoNostrDatabase, MemoryDatabase, NostrDatabase};
+use nostr_runtime::prelude::*;
 
 use super::options::RelayOptions;
-use super::{Relay, RelayCapabilities};
+use super::{Error, Relay, RelayCapabilities};
 use crate::policy::AdmitPolicy;
 use crate::transport::websocket::{DefaultWebsocketTransport, WebSocketTransport};
 
@@ -16,6 +17,8 @@ use crate::transport::websocket::{DefaultWebsocketTransport, WebSocketTransport}
 pub struct RelayBuilder {
     /// Relay URL
     pub url: RelayUrl,
+    /// Nostr Runtime
+    pub runtime: Option<Arc<dyn NostrRuntime>>,
     /// WebSocket transport
     pub websocket_transport: Arc<dyn WebSocketTransport>,
     /// Nostr Signer
@@ -36,6 +39,13 @@ impl RelayBuilder {
     pub fn new(url: RelayUrl) -> Self {
         Self {
             url,
+            #[cfg(feature = "runtime-tokio")]
+            runtime: match TokioRuntime::try_current() {
+                Ok(runtime) => Some(Arc::new(runtime)),
+                Err(_) => None,
+            },
+            #[cfg(not(feature = "runtime-tokio"))]
+            runtime: None,
             websocket_transport: Arc::new(DefaultWebsocketTransport),
             signer: None,
             database: Arc::new(MemoryDatabase::default()),
@@ -101,7 +111,7 @@ impl RelayBuilder {
 
     /// Build relay
     #[inline]
-    pub fn build(self) -> Relay {
+    pub fn build(self) -> Result<Relay, Error> {
         Relay::from_builder(self)
     }
 }

@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     wot.allowed_public_keys.insert(allowed_public_key);
 
     // Init client
-    let client = Client::builder().admit_policy(wot).build();
+    let client = Client::builder().admit_policy(wot).build()?;
     client.add_relay("wss://relay.damus.io").await?;
     client.connect().await;
 

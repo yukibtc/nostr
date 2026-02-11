@@ -141,7 +141,8 @@ mod tests {
                     .verify_subscriptions(true)
                     .ban_relay_on_mismatch(true),
             )
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(relay.status(), RelayStatus::Initialized);
 
@@ -234,7 +235,7 @@ mod tests {
         // Signer
         let keys = Keys::generate();
 
-        let relay: Relay = Relay::builder(url).signer(keys.clone()).build();
+        let relay: Relay = Relay::builder(url).signer(keys.clone()).build().unwrap();
 
         relay.connect();
 

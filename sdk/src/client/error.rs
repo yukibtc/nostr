@@ -30,6 +30,8 @@ pub enum Error {
     EventBuilder(event::builder::Error),
     /// Json error
     Json(serde_json::Error),
+    /// Runtime not configured
+    RuntimeNotConfigured,
     /// Signer not configured
     SignerNotConfigured,
     /// Gossip is not configured
@@ -53,6 +55,7 @@ impl fmt::Display for Error {
             Self::Gossip(e) => e.fmt(f),
             Self::EventBuilder(e) => e.fmt(f),
             Self::Json(e) => e.fmt(f),
+            Self::RuntimeNotConfigured => f.write_str("runtime not configured"),
             Self::SignerNotConfigured => f.write_str("signer not configured"),
             Self::GossipNotConfigured => f.write_str("gossip not configured"),
             Self::GossipFiltersEmpty => {

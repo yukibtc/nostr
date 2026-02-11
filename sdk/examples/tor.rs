@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     let client = Client::builder()
         .signer(keys.clone())
         .connection(connection)
-        .build();
+        .build()?;
 
     // Add relays
     client.add_relay("wss://relay.damus.io").await?;

@@ -6,22 +6,25 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use async_utility::task;
 use nostr::prelude::*;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+
+use crate::runtime::RuntimeWrapper;
 
 const PERMIT_NUM: usize = 1;
 
 #[derive(Debug, Clone)]
 pub(in crate::client) struct GossipSemaphore {
+    runtime: RuntimeWrapper,
     /// Tracks semaphores per public key
     in_flight: Arc<Mutex<HashMap<PublicKey, Arc<Semaphore>>>>,
 }
 
 impl GossipSemaphore {
     #[inline]
-    pub(super) fn new() -> Self {
+    pub(super) fn new(runtime: RuntimeWrapper) -> Self {
         Self {
+            runtime,
             in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -70,7 +73,7 @@ impl GossipSemaphore {
         drop(map);
 
         // Return a permit
-        GossipSemaphorePermit::new(permits, public_keys, self.clone())
+        GossipSemaphorePermit::new(self.runtime.clone(), permits, public_keys, self.clone())
     }
 
     /// Clean up unused semaphores
@@ -98,6 +101,7 @@ impl GossipSemaphore {
 
 #[derive(Debug)]
 struct InnerSemaphorePermit {
+    runtime: RuntimeWrapper,
     permits: Vec<OwnedSemaphorePermit>,
     public_keys: BTreeSet<PublicKey>,
     semaphore: GossipSemaphore,
@@ -110,11 +114,13 @@ pub struct GossipSemaphorePermit(Option<InnerSemaphorePermit>);
 impl GossipSemaphorePermit {
     #[inline]
     fn new(
+        runtime: RuntimeWrapper,
         permits: Vec<OwnedSemaphorePermit>,
         public_keys: BTreeSet<PublicKey>,
         semaphore: GossipSemaphore,
     ) -> Self {
         let inner: InnerSemaphorePermit = InnerSemaphorePermit {
+            runtime,
             permits,
             public_keys,
             semaphore,
@@ -135,9 +141,9 @@ impl Drop for GossipSemaphorePermit {
         drop(inner.permits);
 
         // Cleanup
-        task::spawn(async move {
+        inner.runtime.spawn_boxed(Box::pin(async move {
             inner.semaphore.cleanup(&inner.public_keys).await;
-        });
+        }));
     }
 }
 
@@ -145,6 +151,8 @@ impl Drop for GossipSemaphorePermit {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    use nostr_runtime::runtime::TokioRuntime;
 
     use super::*;
 
@@ -157,7 +165,8 @@ mod tests {
     /// Expected: Both tasks complete successfully
     #[tokio::test]
     async fn test_basic_concurrency() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let pk1 = Keys::generate().public_key();
         let pk2 = Keys::generate().public_key();
 
@@ -187,7 +196,8 @@ mod tests {
     /// Verification: Counter shows Task 1 incremented twice before Task 2 starts
     #[tokio::test]
     async fn test_same_key_blocks() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let pk = Keys::generate().public_key();
 
         let counter = Arc::new(AtomicUsize::new(0));
@@ -231,7 +241,8 @@ mod tests {
     /// Timeout: 10 seconds (should complete in <1 second)
     #[tokio::test]
     async fn test_100_requests() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let keys: Vec<_> = (0..20).map(|_| Keys::generate().public_key()).collect();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -276,7 +287,8 @@ mod tests {
     /// Timeout: 30 seconds (should complete in <1 second)
     #[tokio::test]
     async fn test_1000_requests() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let keys: Vec<_> = (0..50).map(|_| Keys::generate().public_key()).collect();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -319,7 +331,8 @@ mod tests {
     /// Timeout: 60 seconds (should complete in <1 second)
     #[tokio::test]
     async fn test_10000_requests() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let keys: Vec<_> = (0..100).map(|_| Keys::generate().public_key()).collect();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -366,7 +379,8 @@ mod tests {
     /// with varying request sizes (10-200 keys per request)
     #[tokio::test]
     async fn test_1000_unique_keys() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let keys: Vec<_> = (0..1000).map(|_| Keys::generate().public_key()).collect();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -415,7 +429,8 @@ mod tests {
     /// to keep semaphores forever. They should be cleaned up when not in use.
     #[tokio::test]
     async fn test_cleanup() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let pk = Keys::generate().public_key();
 
         // Acquire and immediately drop permit
@@ -448,7 +463,8 @@ mod tests {
     /// Coverage: Tests the `available_permits() != 1` branch in cleanup
     #[tokio::test]
     async fn test_cleanup_keeps_active_semaphores() {
-        let semaphore = GossipSemaphore::new();
+        let runtime = RuntimeWrapper::new(Arc::new(TokioRuntime::current()));
+        let semaphore = GossipSemaphore::new(runtime);
         let pk = Keys::generate().public_key();
 
         let s1 = semaphore.clone();

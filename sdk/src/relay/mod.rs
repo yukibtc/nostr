@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_utility::time;
 use async_wsocket::ConnectionMode;
 use futures::StreamExt;
 use nostr_database::prelude::*;
+use nostr_runtime::prelude::*;
 use tokio::sync::{broadcast, oneshot};
 
 mod api;
@@ -36,6 +36,7 @@ pub use self::options::*;
 pub use self::stats::*;
 pub use self::status::*;
 use crate::client::ClientNotification;
+use crate::runtime::RuntimeWrapper;
 use crate::shared::SharedState;
 use crate::stream::{BoxedStream, NotificationStream};
 
@@ -113,8 +114,9 @@ impl Relay {
     ///
     /// Use [`Relay::builder`] for customizing the relay.
     #[inline]
+    #[cfg(feature = "runtime-tokio")]
     pub fn new(url: RelayUrl) -> Self {
-        Self::builder(url).build()
+        Self::builder(url).build().expect("Failed to build relay")
     }
 
     /// Construct a new relay builder.
@@ -123,8 +125,12 @@ impl Relay {
         RelayBuilder::new(url)
     }
 
-    fn from_builder(builder: RelayBuilder) -> Self {
+    fn from_builder(builder: RelayBuilder) -> Result<Self, Error> {
+        let runtime: Arc<dyn NostrRuntime> = builder.runtime.ok_or(Error::RuntimeNotConfigured)?;
+        let runtime: RuntimeWrapper = RuntimeWrapper::new(runtime);
+
         let state: SharedState = SharedState::new(
+            runtime,
             builder.database,
             builder.websocket_transport,
             builder.signer,
@@ -133,10 +139,10 @@ impl Relay {
             None,
         );
 
-        Self {
+        Ok(Self {
             inner: InnerRelay::new(builder.url, state, builder.capabilities, builder.opts),
             atomic_counter: Arc::new(()),
-        }
+        })
     }
 
     /// Get relay url
@@ -279,27 +285,31 @@ impl Relay {
         let mut notifications = self.inner.internal_notification_sender.subscribe();
 
         // Set timeout
-        time::timeout(Some(timeout), async {
-            while let Ok(notification) = notifications.recv().await {
-                // Wait for status change. Break loop when connect.
-                if let RelayNotification::RelayStatus { status } = notification {
-                    match status {
-                        // Waiting for connection
-                        RelayStatus::Initialized
-                        | RelayStatus::Pending
-                        | RelayStatus::Connecting
-                        | RelayStatus::Disconnected => {}
-                        // Connected or terminated/banned/sleeping/shutdown
-                        RelayStatus::Connected
-                        | RelayStatus::Terminated
-                        | RelayStatus::Banned
-                        | RelayStatus::Sleeping
-                        | RelayStatus::Shutdown => break,
+        let _ = self
+            .inner
+            .state
+            .runtime()
+            .timeout(timeout, async {
+                while let Ok(notification) = notifications.recv().await {
+                    // Wait for status change. Break loop when connect.
+                    if let RelayNotification::RelayStatus { status } = notification {
+                        match status {
+                            // Waiting for connection
+                            RelayStatus::Initialized
+                            | RelayStatus::Pending
+                            | RelayStatus::Connecting
+                            | RelayStatus::Disconnected => {}
+                            // Connected or terminated/banned/sleeping/shutdown
+                            RelayStatus::Connected
+                            | RelayStatus::Terminated
+                            | RelayStatus::Banned
+                            | RelayStatus::Sleeping
+                            | RelayStatus::Shutdown => break,
+                        }
                     }
                 }
-            }
-        })
-        .await;
+            })
+            .await;
     }
 
     /// Try to establish a connection with the relay.
@@ -409,25 +419,27 @@ impl Relay {
         let mut count = 0;
 
         let mut notifications = self.inner.internal_notification_sender.subscribe();
-        time::timeout(Some(timeout), async {
-            while let Ok(notification) = notifications.recv().await {
-                if let RelayNotification::Message {
-                    message:
-                        RelayMessage::Count {
-                            subscription_id,
-                            count: c,
-                        },
-                } = notification
-                {
-                    if subscription_id.as_ref() == &id {
-                        count = c;
-                        break;
+        self.inner
+            .state
+            .runtime()
+            .timeout(timeout, async {
+                while let Ok(notification) = notifications.recv().await {
+                    if let RelayNotification::Message {
+                        message:
+                            RelayMessage::Count {
+                                subscription_id,
+                                count: c,
+                            },
+                    } = notification
+                    {
+                        if subscription_id.as_ref() == &id {
+                            count = c;
+                            break;
+                        }
                     }
                 }
-            }
-        })
-        .await
-        .ok_or(Error::Timeout)?;
+            })
+            .await?;
 
         // Unsubscribe
         self.send_msg(ClientMessage::close(id)).await?;
@@ -447,7 +459,6 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    use async_utility::time;
     use nostr_relay_builder::prelude::*;
 
     use super::{Error, *};
@@ -474,7 +485,7 @@ mod tests {
     }
 
     fn new_relay(url: RelayUrl, opts: RelayOptions) -> Relay {
-        Relay::builder(url).opts(opts).build()
+        Relay::builder(url).opts(opts).build().unwrap()
     }
 
     async fn setup_subscription_relay() -> (SubscriptionId, Relay, MockRelay) {
@@ -519,7 +530,7 @@ mod tests {
 
         mock.shutdown();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Disconnected);
 
@@ -546,7 +557,7 @@ mod tests {
 
         mock.shutdown();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
 
@@ -573,7 +584,7 @@ mod tests {
 
         relay.disconnect();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
 
@@ -593,17 +604,17 @@ mod tests {
 
         relay.connect();
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert!(relay.inner.is_running());
 
         assert_eq!(relay.status(), RelayStatus::Disconnected);
 
-        time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
 
         relay.disconnect();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
 
@@ -638,7 +649,7 @@ mod tests {
 
         relay.connect();
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(relay.status(), RelayStatus::Disconnected);
         assert!(relay.inner.is_running());
@@ -660,17 +671,17 @@ mod tests {
 
         relay.connect();
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(relay.status(), RelayStatus::Connecting);
 
-        time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         assert_eq!(relay.status(), RelayStatus::Connected);
 
         relay.disconnect();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
 
@@ -693,13 +704,13 @@ mod tests {
 
         relay.connect();
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(relay.status(), RelayStatus::Connecting);
 
         relay.disconnect();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
 
@@ -723,7 +734,7 @@ mod tests {
         // Terminate after 3 secs
         let r = relay.clone();
         tokio::spawn(async move {
-            time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
             r.disconnect();
         });
 
@@ -794,7 +805,7 @@ mod tests {
 
         relay.shutdown();
 
-        time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert_eq!(relay.status(), RelayStatus::Shutdown);
 
@@ -830,20 +841,20 @@ mod tests {
                 tokio::spawn(async move {
                     assert_eq!(Arc::strong_count(&r2.atomic_counter), 2);
 
-                    time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
 
                     // r2 dropped here
                 });
             }
 
-            time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
 
             assert_eq!(Arc::strong_count(&relay.atomic_counter), 1);
 
             inner
         }; // relay dropped here
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(inner.status(), RelayStatus::Shutdown);
         assert!(!inner.is_running());
@@ -878,7 +889,7 @@ mod tests {
     async fn test_unsubscribe() {
         let (id, relay, _mock) = setup_subscription_relay().await;
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert!(relay.subscription(&id).await.is_some());
 
@@ -891,7 +902,7 @@ mod tests {
     async fn test_unsubscribe_all() {
         let (_id, relay, _mock) = setup_subscription_relay().await;
 
-        time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         relay.unsubscribe_all().await.unwrap();
 
@@ -914,7 +925,7 @@ mod tests {
 
         relay.connect();
 
-        time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         assert_eq!(relay.status(), RelayStatus::Terminated);
         assert!(!relay.inner.is_running());
@@ -950,7 +961,7 @@ mod tests {
         assert_eq!(relay.status(), RelayStatus::Connected);
 
         // Wait to make sure the relay go in sleep mode (see SLEEP_INTERVAL const)
-        time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         check_relay_is_sleeping(&relay);
 
         // Test wake up when sending an event
@@ -961,7 +972,7 @@ mod tests {
         assert_eq!(relay.status(), RelayStatus::Connected);
 
         // Check if relay is sleeping
-        time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         check_relay_is_sleeping(&relay);
 
         // Test wake up when fetch events
@@ -974,7 +985,7 @@ mod tests {
         assert_eq!(relay.status(), RelayStatus::Connected);
 
         // Check if relay is sleeping
-        time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         check_relay_is_sleeping(&relay);
 
         // Test wake up when sync
@@ -983,7 +994,7 @@ mod tests {
         assert_eq!(relay.status(), RelayStatus::Connected);
 
         // Check if relay is sleeping
-        time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
         check_relay_is_sleeping(&relay);
     }
 
@@ -1012,7 +1023,7 @@ mod tests {
         let filter = Filter::new().kind(Kind::TextNote);
         relay.subscribe(filter).await.unwrap();
 
-        time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
         assert_eq!(relay.status(), RelayStatus::Connected);
     }
 
@@ -1035,7 +1046,7 @@ mod tests {
         // Shutdown after some time
         let r = relay.clone();
         tokio::spawn(async move {
-            time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
 
             r.shutdown()
         });

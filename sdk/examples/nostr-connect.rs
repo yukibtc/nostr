@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     println!("\nBunker URI: {bunker_uri}\n");
 
     // Compose client
-    let client = Client::builder().signer(signer.clone()).build();
+    let client = Client::builder().signer(signer.clone()).build()?;
     client.add_relay("wss://relay.damus.io").await?;
     client.connect().await;
 

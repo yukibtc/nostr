@@ -73,20 +73,20 @@ impl NostrWalletConnect {
         NostrWalletConnectBuilder::new(uri)
     }
 
-    fn from_builder(builder: NostrWalletConnectBuilder) -> Self {
+    fn from_builder(builder: NostrWalletConnectBuilder) -> Result<Self, Error> {
         let client: Client = match builder.monitor {
-            Some(monitor) => Client::builder().monitor(monitor).build(),
+            Some(monitor) => Client::builder().monitor(monitor).build()?,
             None => Client::default(),
         };
 
-        Self {
+        Ok(Self {
             uri: builder.uri,
             client,
             timeout: builder.timeout,
             relay_opts: builder.relay,
             bootstrapped: Arc::new(AtomicBool::new(false)),
             notifications_subscribed: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     /// Get URI

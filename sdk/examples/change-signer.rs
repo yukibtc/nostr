@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     let keys = Keys::parse("nsec1ufnus6pju578ste3v90xd5m2decpuzpql2295m3sknqcjzyys9ls0qlc85")?;
     let signer = Arc::new(MySignerSwitcher::new(keys));
 
-    let client = Client::builder().signer(signer.clone()).build();
+    let client = Client::builder().signer(signer.clone()).build()?;
 
     let pk = client.signer().unwrap().get_public_key().await?;
     println!("Public Key: {}", pk.to_bech32()?);

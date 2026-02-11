@@ -15,8 +15,12 @@ keywords = ["nostr", "sdk"]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+default = ["runtime-tokio"]
+# Enables tokio runtime
+runtime-tokio = ["nostr-runtime/tokio"]
+
 [dependencies]
-async-utility.workspace = true
 async-wsocket = { workspace = true, features = ["socks"] }
 futures = "0.3"
 hex = { workspace = true, features = ["std"] }
@@ -25,6 +29,7 @@ negentropy = { workspace = true, features = ["std"] }
 nostr = { workspace = true, features = ["std", "rand", "os-rng"] }
 nostr-database.workspace = true
 nostr-gossip.workspace = true
+nostr-runtime.workspace = true
 tokio = { workspace = true, features = ["macros", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = { workspace = true, features = ["std"] }
@@ -36,53 +41,69 @@ nostr-lmdb.workspace = true
 nostr-ndb.workspace = true
 nostr-gossip-memory.workspace = true
 nostr-relay-builder.workspace = true
+nostr-runtime = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [[example]]
 name = "aggregated-query"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "blacklist"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "client"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "comment"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "fetch-events"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "gossip"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "monitor"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "nostr-connect"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "bot"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "nostrdb"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "stream-events"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "subscriptions"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "tor"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "lmdb"
+required-features = ["runtime-tokio"]
 
 [[example]]
 name = "whitelist"
+required-features = ["runtime-tokio"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bench)'] }
