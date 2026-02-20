@@ -13,6 +13,7 @@ use nostr_database::prelude::*;
 use tokio::sync::{broadcast, oneshot};
 
 mod api;
+mod auth_lock;
 mod builder;
 mod capabilities;
 mod constants;

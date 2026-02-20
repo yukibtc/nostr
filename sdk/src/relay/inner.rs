@@ -16,6 +16,7 @@ use nostr_database::prelude::*;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::{broadcast, oneshot, Mutex, MutexGuard, Notify, RwLock, RwLockWriteGuard};
 
+use super::auth_lock::AuthLock;
 use super::capabilities::{AtomicRelayCapabilities, RelayCapabilities};
 use super::constants::{
     JITTER_RANGE, MAX_RETRY_INTERVAL, MIN_ATTEMPTS, MIN_SUCCESS_RATE, PING_INTERVAL,
@@ -24,12 +25,12 @@ use super::constants::{
 use super::options::{RelayOptions, ReqExitPolicy, SubscribeAutoCloseOptions};
 use super::ping::PingTracker;
 use super::stats::RelayConnectionStats;
+use super::status::AtomicRelayStatus;
 use super::{
     Error, RelayNotification, RelayStatus, SubscriptionActivity, SubscriptionAutoClosedReason,
 };
 use crate::client::ClientNotification;
 use crate::policy::AdmitStatus;
-use crate::relay::status::AtomicRelayStatus;
 use crate::shared::SharedState;
 use crate::transport::error::TransportError;
 use crate::transport::websocket::{WebSocketSink, WebSocketStream};
@@ -132,6 +133,7 @@ pub(super) struct AtomicPrivateData {
     status: AtomicRelayStatus,
     channels: RelayChannels,
     subscriptions: RwLock<HashMap<SubscriptionId, SubscriptionData>>,
+    auth_lock: AuthLock,
     running: AtomicBool,
 }
 
@@ -163,6 +165,7 @@ impl InnerRelay {
                 status: AtomicRelayStatus::default(),
                 channels: RelayChannels::new(),
                 subscriptions: RwLock::new(HashMap::new()),
+                auth_lock: AuthLock::new(),
                 running: AtomicBool::new(false),
             }),
             capabilities: Arc::new(AtomicRelayCapabilities::new(capabilities)),
@@ -1329,6 +1332,14 @@ impl InnerRelay {
             return Err(Error::ReadDisabled);
         }
 
+        // Acquire a message permit if the message is not AUTH.
+        // Ongoing authentication holds all permits, so this waits until auth finishes.
+        let _guard: Option<_> = if msg.is_auth() {
+            None
+        } else {
+            Some(self.atomic.auth_lock.acquire_message_permit().await)
+        };
+
         match wait_until_sent {
             Some(timeout) => {
                 // Create a channel
@@ -1363,6 +1374,9 @@ impl InnerRelay {
         // Get signer
         let signer = self.state.signer().ok_or(Error::SignerNotConfigured)?;
 
+        // Acquire exclusive auth guard.
+        let guard = self.atomic.auth_lock.acquire_auth_guard().await;
+
         // Construct event
         let event: Event = EventBuilder::auth(challenge, self.url.clone())
             .sign(signer)
@@ -1380,6 +1394,9 @@ impl InnerRelay {
         let (status, message) = self
             .wait_for_ok(&mut notifications, &event.id, Duration::from_secs(10))
             .await?;
+
+        // Drop the auth lock
+        drop(guard);
 
         // Check status
         if status {
