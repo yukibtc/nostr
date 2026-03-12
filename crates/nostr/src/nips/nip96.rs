@@ -117,7 +117,7 @@ impl UploadResponse {
     /// Extract the download URL from the upload response
     ///
     /// Returns an error if the upload was unsuccessful or if the URL cannot be found
-    pub fn download_url(&self) -> Result<&Url, Error> {
+    pub fn download_url(&self) -> Result<Url, Error> {
         if !self.status.is_success() {
             return Err(Error::UploadError(self.message.clone()));
         }

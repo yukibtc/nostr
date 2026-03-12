@@ -161,7 +161,7 @@ impl NostrHttpFileStorageClient {
     pub async fn get_server_config(&self, server_url: &Url) -> Result<ServerConfig, Error> {
         let nip96_url: Url = nip96::get_server_config_url(server_url)?;
 
-        let response = self.client.get(nip96_url).send().await?;
+        let response = self.client.get(nip96_url.as_str()).send().await?;
 
         // Deserialize response
         Ok(response.json().await?)
@@ -187,7 +187,7 @@ impl NostrHttpFileStorageClient {
         // Send
         let response: Response = self
             .client
-            .post(config.api_url.clone())
+            .post(config.api_url.as_str())
             .header("Authorization", req.authorization())
             .multipart(form)
             .send()
@@ -197,7 +197,7 @@ impl NostrHttpFileStorageClient {
         let res: UploadResponse = response.json().await?;
 
         // Try to extract download URL
-        Ok(res.download_url().cloned()?)
+        Ok(res.download_url()?)
     }
 }
 

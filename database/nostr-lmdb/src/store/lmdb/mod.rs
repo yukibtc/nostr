@@ -1159,7 +1159,7 @@ impl Lmdb {
     pub(crate) fn mark_coordinate_deleted(
         &self,
         txn: &mut RwTxn,
-        coordinate: &CoordinateBorrow,
+        coordinate: &Coordinate,
         when: Timestamp,
     ) -> Result<(), Error> {
         let key: Vec<u8> = index::make_coordinate_index_key(coordinate);
@@ -1167,10 +1167,10 @@ impl Lmdb {
         Ok(())
     }
 
-    pub(crate) fn when_is_coordinate_deleted<'a>(
+    pub(crate) fn when_is_coordinate_deleted(
         &self,
         txn: &RoTxn,
-        coordinate: &'a CoordinateBorrow<'a>,
+        coordinate: &Coordinate,
     ) -> Result<Option<Timestamp>, Error> {
         let key: Vec<u8> = index::make_coordinate_index_key(coordinate);
         Ok(self
@@ -1331,7 +1331,7 @@ impl Lmdb {
                     return Ok(true);
                 }
 
-                deletions_to_process.push((*id, EventIndexKeys::new(target)));
+                deletions_to_process.push((id, EventIndexKeys::new(target)));
             }
         }
 
@@ -1351,13 +1351,13 @@ impl Lmdb {
             }
 
             // Mark deleted
-            self.mark_coordinate_deleted(txn, &coordinate.borrow(), event.created_at)?;
+            self.mark_coordinate_deleted(txn, &coordinate, event.created_at)?;
 
             // Remove events (up to the created_at of the deletion event)
             if coordinate.kind.is_replaceable() {
-                self.remove_replaceable(txn, coordinate, event.created_at)?;
+                self.remove_replaceable(txn, &coordinate, event.created_at)?;
             } else if coordinate.kind.is_addressable() {
-                self.remove_addressable(txn, coordinate, event.created_at)?;
+                self.remove_addressable(txn, &coordinate, event.created_at)?;
             }
         }
 
