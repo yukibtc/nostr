@@ -24,8 +24,8 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Error, Tag};
-use crate::nips::nip01::Coordinate;
-use crate::prelude::TagStandardNip01;
+use crate::nips::nip01::{Coordinate, TagStandardNip01};
+use crate::nips::nip40::TagStandardNip40;
 use crate::{EventId, PublicKey, SingleLetterTag, TagKind, Timestamp};
 
 /// Tags Indexes
@@ -415,9 +415,9 @@ impl Tags {
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/40.md>
     pub fn expiration(&self) -> Option<Timestamp> {
-        match self.find_standardized(TagKind::Expiration)? {
-            TagStandard::Expiration(timestamp) => Some(timestamp),
-            _ => None,
+        let tag: &Tag = self.find(TagKind::Expiration)?;
+        match TagStandardNip40::parse(tag.as_slice()).ok()? {
+            TagStandardNip40::Expiration(timestamp) => Some(timestamp),
         }
     }
 
