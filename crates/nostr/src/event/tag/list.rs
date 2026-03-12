@@ -25,7 +25,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Error, Tag};
 use crate::nips::nip01::Coordinate;
-use crate::{EventId, PublicKey, SingleLetterTag, TagKind, TagStandard, Timestamp};
+use crate::prelude::TagStandardNip01;
+use crate::{EventId, PublicKey, SingleLetterTag, TagKind, Timestamp};
 
 /// Tags Indexes
 pub type TagsIndexes = BTreeMap<SingleLetterTag, BTreeSet<String>>;
@@ -366,11 +367,11 @@ impl Tags {
         self.list.iter().find(|t| t.kind() == kind)
     }
 
-    /// Get the first tag that match [`TagKind`] and that is standardized.
-    #[inline]
-    pub fn find_standardized(&self, kind: TagKind) -> Option<TagStandard> {
-        self.find(kind).and_then(|t| t.standardized())
-    }
+    // /// Get the first tag that match [`TagKind`] and that is standardized.
+    // #[inline]
+    // pub fn find_standardized(&self, kind: TagKind) -> Option<TagStandard> {
+    //     self.find(kind).and_then(|t| t.standardized())
+    // }
 
     /// Filter tags that match [`TagKind`].
     #[inline]
@@ -378,14 +379,14 @@ impl Tags {
         self.list.iter().filter(move |t| t.kind() == kind)
     }
 
-    /// Get the first tag that match [`TagKind`] and that is standardized.
-    #[inline]
-    pub fn filter_standardized<'a>(
-        &'a self,
-        kind: TagKind<'a>,
-    ) -> impl Iterator<Item = TagStandard> + 'a {
-        self.filter(kind).filter_map(|t| t.standardized())
-    }
+    // /// Get the first tag that match [`TagKind`] and that is standardized.
+    // #[inline]
+    // pub fn filter_standardized<'a>(
+    //     &'a self,
+    //     kind: TagKind<'a>,
+    // ) -> impl Iterator<Item = TagStandard> + 'a {
+    //     self.filter(kind).filter_map(|t| t.standardized())
+    // }
 
     /// Get as slice of tags
     #[inline]
@@ -402,8 +403,10 @@ impl Tags {
     /// Extract identifier (`d` tag), if exists.
     #[inline]
     pub fn identifier(&self) -> Option<String> {
-        match self.find_standardized(TagKind::d())? {
-            TagStandard::Identifier(identifier) => Some(identifier),
+        let tag: &Tag = self.find(TagKind::d())?;
+
+        match TagStandardNip01::parse(tag.as_slice()).ok()? {
+            TagStandardNip01::Identifier(identifier) => Some(identifier),
             _ => None,
         }
     }
@@ -418,7 +421,9 @@ impl Tags {
         }
     }
 
-    /// Extract NIP42 challenge, if exists.
+    /// Extract NIP-42 challenge, if exists.
+    ///
+    /// <https://github.com/nostr-protocol/nips/blob/master/42.md>
     #[inline]
     pub fn challenge(&self) -> Option<String> {
         match self.find_standardized(TagKind::Challenge)? {
@@ -429,54 +434,54 @@ impl Tags {
 
     /// Extract public keys from `p` tags.
     ///
-    /// This method extract only [`TagStandard::PublicKey`], [`TagStandard::PublicKeyReport`] and [`TagStandard::PublicKeyLiveEvent`] variants.
+    /// **This method extracts only NIP-01 "p" tags.**
     #[inline]
     pub fn public_keys(&self) -> impl Iterator<Item = PublicKey> + '_ {
-        self.filter_standardized(TagKind::p())
-            .filter_map(|t| match t {
-                TagStandard::PublicKey { public_key, .. } => Some(public_key),
-                TagStandard::PublicKeyReport(public_key, ..) => Some(public_key),
-                TagStandard::PublicKeyLiveEvent { public_key, .. } => Some(public_key),
+        self.filter(TagKind::p()).filter_map(|t| {
+            match TagStandardNip01::parse(t.as_slice()).ok()? {
+                TagStandardNip01::PublicKey { public_key, .. } => Some(public_key),
                 _ => None,
-            })
+            }
+        })
     }
 
     /// Extract event IDs from `e` tags.
     ///
-    /// This method extract only [`TagStandard::Event`] and [`TagStandard::EventReport`] variants.
+    /// **This method extracts only NIP-01 "e" tags.**
     #[inline]
     pub fn event_ids(&self) -> impl Iterator<Item = EventId> + '_ {
-        self.filter_standardized(TagKind::e())
-            .filter_map(|t| match t {
-                TagStandard::Event { event_id, .. } => Some(event_id),
-                TagStandard::EventReport(event_id, ..) => Some(event_id),
+        self.filter(TagKind::e()).filter_map(|t| {
+            match TagStandardNip01::parse(t.as_slice()).ok()? {
+                TagStandardNip01::Event { id, .. } => Some(id),
                 _ => None,
-            })
+            }
+        })
     }
 
     /// Extract coordinates from `a` tags.
     ///
-    /// This method extract only [`TagStandard::Coordinate`] variant.
+    /// **This method extracts only NIP-01 "a" tags.**
     #[inline]
     pub fn coordinates(&self) -> impl Iterator<Item = Coordinate> + '_ {
-        self.filter_standardized(TagKind::a())
-            .filter_map(|t| match t {
-                TagStandard::Coordinate { coordinate, .. } => Some(coordinate),
+        self.filter(TagKind::a()).filter_map(|t| {
+            match TagStandardNip01::parse(t.as_slice()).ok()? {
+                TagStandardNip01::Coordinate { coordinate, .. } => Some(coordinate),
                 _ => None,
-            })
+            }
+        })
     }
 
-    /// Extract hashtags from `t` tags.
-    ///
-    /// This method extract only [`TagStandard::Hashtag`] variant.
-    #[inline]
-    pub fn hashtags(&self) -> impl Iterator<Item = String> + '_ {
-        self.filter_standardized(TagKind::t())
-            .filter_map(|t| match t {
-                TagStandard::Hashtag(hashtag) => Some(hashtag),
-                _ => None,
-            })
-    }
+    // /// Extract hashtags from `t` tags.
+    // ///
+    // /// This method extract only [`TagStandard::Hashtag`] variant.
+    // #[inline]
+    // pub fn hashtags(&self) -> impl Iterator<Item = String> + '_ {
+    //     self.filter_standardized(TagKind::t())
+    //         .filter_map(|t| match t {
+    //             TagStandard::Hashtag(hashtag) => Some(hashtag),
+    //             _ => None,
+    //         })
+    // }
 
     fn build_indexes(&self) -> TagsIndexes {
         let mut idx: TagsIndexes = TagsIndexes::new();

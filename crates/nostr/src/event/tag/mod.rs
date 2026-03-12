@@ -14,18 +14,16 @@ pub mod cow;
 mod error;
 pub mod kind;
 pub mod list;
-pub mod standard;
 
 pub use self::cow::CowTag;
 pub use self::error::Error;
 pub use self::kind::TagKind;
 pub use self::list::Tags;
-pub use self::standard::TagStandard;
 use super::id::EventId;
 use crate::nips::nip01::Coordinate;
-use crate::nips::nip10::Marker;
 use crate::nips::nip56::Report;
 use crate::nips::nip65::RelayMetadata;
+use crate::prelude::TagStandardNip01;
 use crate::types::Url;
 use crate::{ImageDimensions, PublicKey, RelayUrl, SingleLetterTag, Timestamp};
 
@@ -69,7 +67,7 @@ impl Hash for Tag {
 
 impl Tag {
     #[inline]
-    fn new(buf: Vec<String>) -> Self {
+    pub(crate) fn new(buf: Vec<String>) -> Self {
         // The tag must not be empty!
         assert!(!buf.is_empty());
 
@@ -97,12 +95,6 @@ impl Tag {
         Ok(Self::new(tag))
     }
 
-    /// Construct from standardized tag
-    #[inline]
-    pub fn from_standardized(standardized: TagStandard) -> Self {
-        Self::new(standardized.to_vec())
-    }
-
     /// Get tag kind
     #[inline]
     pub fn kind(&self) -> TagKind<'_> {
@@ -124,12 +116,6 @@ impl Tag {
             TagKind::SingleLetter(s) => Some(s),
             _ => None,
         }
-    }
-
-    /// Attempt to parse as a standardized tag
-    #[inline]
-    pub fn standardized(&self) -> Option<TagStandard> {
-        TagStandard::parse(self.as_slice()).ok()
     }
 
     /// Get tag len
@@ -232,23 +218,30 @@ impl Tag {
         self.buf
     }
 
-    /// Compose `["e", "<event-id">]`
+    /// Create a `["e", "<event-id">]` tag
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md>
     #[inline]
-    pub fn event(event_id: EventId) -> Self {
-        Self::from_standardized(TagStandard::event(event_id))
+    pub fn event(id: EventId) -> Self {
+        Self::from(TagStandardNip01::Event {
+            id,
+            relay_hint: None,
+            public_key: None,
+        })
     }
 
-    /// Compose `["p", "<public-key>"]` tag
+    /// Create a `["p", "<public-key>"]` tag
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md>
     #[inline]
     pub fn public_key(public_key: PublicKey) -> Self {
-        Self::from_standardized(TagStandard::public_key(public_key))
+        Self::from(TagStandardNip01::PublicKey {
+            public_key,
+            relay_hint: None,
+        })
     }
 
-    /// Compose `["d", "<identifier>"]` tag
+    /// Create a `["d", "<identifier>"]` tag
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md>
     #[inline]
@@ -256,183 +249,182 @@ impl Tag {
     where
         T: Into<String>,
     {
-        Self::from_standardized(TagStandard::Identifier(identifier.into()))
+        Self::from(TagStandardNip01::Identifier(identifier.into()))
     }
 
-    /// Compose `["a", "<coordinate>", "<optional-relay-url>"]` tag
+    /// Create a `["a", "<coordinate>"]` tag
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md>
     #[inline]
-    pub fn coordinate(coordinate: Coordinate, relay_url: Option<RelayUrl>) -> Self {
-        Self::from_standardized(TagStandard::Coordinate {
+    pub fn coordinate(coordinate: Coordinate) -> Self {
+        Self::from(TagStandardNip01::Coordinate {
             coordinate,
-            relay_url,
-            uppercase: false,
+            relay_hint: None,
         })
     }
 
-    /// Compose `["nonce", "<nonce>", "<difficulty>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/13.md>
-    #[inline]
-    pub fn pow(nonce: u128, difficulty: u8) -> Self {
-        Self::from_standardized(TagStandard::POW { nonce, difficulty })
-    }
-
-    /// Construct `["client", "<name>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/89.md>
-    pub fn client<S>(name: S) -> Self
-    where
-        S: Into<String>,
-    {
-        Self::from_standardized(TagStandard::Client {
-            name: name.into(),
-            address: None,
-        })
-    }
-
-    /// Compose `["expiration", "<timestamp>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/40.md>
-    #[inline]
-    pub fn expiration(timestamp: Timestamp) -> Self {
-        Self::from_standardized(TagStandard::Expiration(timestamp))
-    }
-
-    /// Compose `["e", "<event-id>", "<report>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/56.md>
-    #[inline]
-    pub fn event_report(event_id: EventId, report: Report) -> Self {
-        Self::from_standardized(TagStandard::EventReport(event_id, report))
-    }
-
-    /// Compose `["p", "<public-key>", "<report>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/56.md>
-    #[inline]
-    pub fn public_key_report(public_key: PublicKey, report: Report) -> Self {
-        Self::from_standardized(TagStandard::PublicKeyReport(public_key, report))
-    }
-
-    /// Compose `["r", "<relay-url>", "<metadata>"]` tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/65.md>
-    #[inline]
-    pub fn relay_metadata(relay_url: RelayUrl, metadata: Option<RelayMetadata>) -> Self {
-        Self::from_standardized(TagStandard::RelayMetadata {
-            relay_url,
-            metadata,
-        })
-    }
-
-    /// Relay url
-    ///
-    /// JSON: `["relay", "<relay-url>"]`
-    #[inline]
-    pub fn relay(url: RelayUrl) -> Self {
-        Self::from_standardized(TagStandard::Relay(url))
-    }
-
-    /// Relay URLs
-    ///
-    /// JSON: `["relays", "<relay-url>", "<relay-url>"]`
-    #[inline]
-    pub fn relays<I>(urls: I) -> Self
-    where
-        I: IntoIterator<Item = RelayUrl>,
-    {
-        Self::from_standardized(TagStandard::Relays(urls.into_iter().collect()))
-    }
-
-    /// All relays
-    ///
-    /// JSON: `["relay", "ALL_RELAYS"]`
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/62.md>
-    #[inline]
-    pub fn all_relays() -> Self {
-        Self::from_standardized(TagStandard::AllRelays)
-    }
-
-    /// Repository head
-    ///
-    /// JSON: `["HEAD", "ref: refs/heads/<branch-name>"]`
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/34.md>
-    #[inline]
-    pub fn head<S>(branch_name: S) -> Self
-    where
-        S: Into<String>,
-    {
-        Self::from_standardized(TagStandard::GitHead(branch_name.into()))
-    }
-
-    /// Compose `["t", "<hashtag>"]` tag
-    ///
-    /// This will convert the hashtag to lowercase.
-    #[inline]
-    pub fn hashtag<T>(hashtag: T) -> Self
-    where
-        T: AsRef<str>,
-    {
-        Self::from_standardized(TagStandard::Hashtag(hashtag.as_ref().to_lowercase()))
-    }
-
-    /// Compose `["r", "<value>"]` tag
-    #[inline]
-    pub fn reference<T>(reference: T) -> Self
-    where
-        T: Into<String>,
-    {
-        Self::from_standardized(TagStandard::Reference(reference.into()))
-    }
-
-    /// Compose `["title", "<title>"]` tag
-    #[inline]
-    pub fn title<T>(title: T) -> Self
-    where
-        T: Into<String>,
-    {
-        Self::from_standardized(TagStandard::Title(title.into()))
-    }
-
-    /// Compose image tag
-    #[inline]
-    pub fn image(url: Url, dimensions: Option<ImageDimensions>) -> Self {
-        Self::from_standardized(TagStandard::Image(url, dimensions))
-    }
-
-    /// Compose `["description", "<description>"]` tag
-    #[inline]
-    pub fn description<T>(description: T) -> Self
-    where
-        T: Into<String>,
-    {
-        Self::from_standardized(TagStandard::Description(description.into()))
-    }
-
-    /// Protected event
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
-    #[inline]
-    pub fn protected() -> Self {
-        Self::from_standardized(TagStandard::Protected)
-    }
-
-    /// A short human-readable plaintext summary of what that event is about
-    ///
-    /// JSON: `["alt", "<summary>"]`
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/31.md>
-    #[inline]
-    pub fn alt<T>(summary: T) -> Self
-    where
-        T: Into<String>,
-    {
-        Self::from_standardized(TagStandard::Alt(summary.into()))
-    }
+    // /// Compose `["nonce", "<nonce>", "<difficulty>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/13.md>
+    // #[inline]
+    // pub fn pow(nonce: u128, difficulty: u8) -> Self {
+    //     Self::from(TagStandard::POW { nonce, difficulty })
+    // }
+    //
+    // /// Construct `["client", "<name>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/89.md>
+    // pub fn client<S>(name: S) -> Self
+    // where
+    //     S: Into<String>,
+    // {
+    //     Self::from(TagStandard::Client {
+    //         name: name.into(),
+    //         address: None,
+    //     })
+    // }
+    //
+    // /// Compose `["expiration", "<timestamp>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/40.md>
+    // #[inline]
+    // pub fn expiration(timestamp: Timestamp) -> Self {
+    //     Self::from(TagStandard::Expiration(timestamp))
+    // }
+    //
+    // /// Compose `["e", "<event-id>", "<report>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/56.md>
+    // #[inline]
+    // pub fn event_report(event_id: EventId, report: Report) -> Self {
+    //     Self::from(TagStandard::EventReport(event_id, report))
+    // }
+    //
+    // /// Compose `["p", "<public-key>", "<report>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/56.md>
+    // #[inline]
+    // pub fn public_key_report(public_key: PublicKey, report: Report) -> Self {
+    //     Self::from(TagStandard::PublicKeyReport(public_key, report))
+    // }
+    //
+    // /// Compose `["r", "<relay-url>", "<metadata>"]` tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/65.md>
+    // #[inline]
+    // pub fn relay_metadata(relay_url: RelayUrl, metadata: Option<RelayMetadata>) -> Self {
+    //     Self::from(TagStandard::RelayMetadata {
+    //         relay_url,
+    //         metadata,
+    //     })
+    // }
+    //
+    // /// Relay url
+    // ///
+    // /// JSON: `["relay", "<relay-url>"]`
+    // #[inline]
+    // pub fn relay(url: RelayUrl) -> Self {
+    //     Self::from(TagStandard::Relay(url))
+    // }
+    //
+    // /// Relay URLs
+    // ///
+    // /// JSON: `["relays", "<relay-url>", "<relay-url>"]`
+    // #[inline]
+    // pub fn relays<I>(urls: I) -> Self
+    // where
+    //     I: IntoIterator<Item = RelayUrl>,
+    // {
+    //     Self::from(TagStandard::Relays(urls.into_iter().collect()))
+    // }
+    //
+    // /// All relays
+    // ///
+    // /// JSON: `["relay", "ALL_RELAYS"]`
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/62.md>
+    // #[inline]
+    // pub fn all_relays() -> Self {
+    //     Self::from(TagStandard::AllRelays)
+    // }
+    //
+    // /// Repository head
+    // ///
+    // /// JSON: `["HEAD", "ref: refs/heads/<branch-name>"]`
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/34.md>
+    // #[inline]
+    // pub fn head<S>(branch_name: S) -> Self
+    // where
+    //     S: Into<String>,
+    // {
+    //     Self::from(TagStandard::GitHead(branch_name.into()))
+    // }
+    //
+    // /// Compose `["t", "<hashtag>"]` tag
+    // ///
+    // /// This will convert the hashtag to lowercase.
+    // #[inline]
+    // pub fn hashtag<T>(hashtag: T) -> Self
+    // where
+    //     T: AsRef<str>,
+    // {
+    //     Self::from(TagStandard::Hashtag(hashtag.as_ref().to_lowercase()))
+    // }
+    //
+    // /// Compose `["r", "<value>"]` tag
+    // #[inline]
+    // pub fn reference<T>(reference: T) -> Self
+    // where
+    //     T: Into<String>,
+    // {
+    //     Self::from(TagStandard::Reference(reference.into()))
+    // }
+    //
+    // /// Compose `["title", "<title>"]` tag
+    // #[inline]
+    // pub fn title<T>(title: T) -> Self
+    // where
+    //     T: Into<String>,
+    // {
+    //     Self::from(TagStandard::Title(title.into()))
+    // }
+    //
+    // /// Compose image tag
+    // #[inline]
+    // pub fn image(url: Url, dimensions: Option<ImageDimensions>) -> Self {
+    //     Self::from(TagStandard::Image(url, dimensions))
+    // }
+    //
+    // /// Compose `["description", "<description>"]` tag
+    // #[inline]
+    // pub fn description<T>(description: T) -> Self
+    // where
+    //     T: Into<String>,
+    // {
+    //     Self::from(TagStandard::Description(description.into()))
+    // }
+    //
+    // /// Protected event
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
+    // #[inline]
+    // pub fn protected() -> Self {
+    //     Self::from(TagStandard::Protected)
+    // }
+    //
+    // /// A short human-readable plaintext summary of what that event is about
+    // ///
+    // /// JSON: `["alt", "<summary>"]`
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/31.md>
+    // #[inline]
+    // pub fn alt<T>(summary: T) -> Self
+    // where
+    //     T: Into<String>,
+    // {
+    //     Self::from(TagStandard::Alt(summary.into()))
+    // }
 
     /// Compose custom tag
     ///
@@ -450,35 +442,35 @@ impl Tag {
         Self::new(buf)
     }
 
-    /// Check if is a standard event tag with `root` marker
-    pub fn is_root(&self) -> bool {
-        matches!(
-            self.standardized(),
-            Some(TagStandard::Event {
-                marker: Some(Marker::Root),
-                ..
-            })
-        )
-    }
-
-    /// Check if is a standard event tag with `reply` marker
-    pub fn is_reply(&self) -> bool {
-        matches!(
-            self.standardized(),
-            Some(TagStandard::Event {
-                marker: Some(Marker::Reply),
-                ..
-            })
-        )
-    }
-
-    /// Check if it's a protected event tag
-    ///
-    /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
-    #[inline]
-    pub fn is_protected(&self) -> bool {
-        matches!(self.standardized(), Some(TagStandard::Protected))
-    }
+    // /// Check if is a standard event tag with `root` marker
+    // pub fn is_root(&self) -> bool {
+    //     matches!(
+    //         self.standardized(),
+    //         Some(TagStandard::Event {
+    //             marker: Some(Marker::Root),
+    //             ..
+    //         })
+    //     )
+    // }
+    //
+    // /// Check if is a standard event tag with `reply` marker
+    // pub fn is_reply(&self) -> bool {
+    //     matches!(
+    //         self.standardized(),
+    //         Some(TagStandard::Event {
+    //             marker: Some(Marker::Reply),
+    //             ..
+    //         })
+    //     )
+    // }
+    //
+    // /// Check if it's a protected event tag
+    // ///
+    // /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
+    // #[inline]
+    // pub fn is_protected(&self) -> bool {
+    //     matches!(self.standardized(), Some(TagStandard::Protected))
+    // }
 }
 
 impl IntoIterator for Tag {
@@ -515,12 +507,6 @@ impl<'de> Deserialize<'de> for Tag {
     }
 }
 
-impl From<TagStandard> for Tag {
-    fn from(standard: TagStandard) -> Self {
-        Self::from_standardized(standard)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use core::str::FromStr;
@@ -538,20 +524,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tag_match_standardized() {
-        let tag: Tag = Tag::parse(["d", "bravery"]).unwrap();
-        assert_eq!(
-            tag.standardized(),
-            Some(TagStandard::Identifier(String::from("bravery")))
-        );
-
-        let tag: Tag = Tag::parse(["d", "test"]).unwrap();
-        assert_eq!(
-            tag.standardized(),
-            Some(TagStandard::Identifier(String::from("test")))
-        );
-    }
+    // #[test]
+    // fn test_tag_match_standardized() {
+    //     let tag: Tag = Tag::parse(["d", "bravery"]).unwrap();
+    //     assert_eq!(
+    //         tag.standardized(),
+    //         Some(TagStandard::Identifier(String::from("bravery")))
+    //     );
+    //
+    //     let tag: Tag = Tag::parse(["d", "test"]).unwrap();
+    //     assert_eq!(
+    //         tag.standardized(),
+    //         Some(TagStandard::Identifier(String::from("test")))
+    //     );
+    // }
 
     #[test]
     fn test_extract_tag_content() {

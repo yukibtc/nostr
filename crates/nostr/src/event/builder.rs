@@ -582,7 +582,7 @@ impl EventBuilder {
             Some(root) => {
                 // Check if root event is different from reply event
                 if root.id != reply_to.id {
-                    tags.push(Tag::from_standardized(TagStandard::Event {
+                    tags.push(Tag::from(TagStandard::Event {
                         event_id: reply_to.id,
                         relay_url: relay_url.clone(),
                         marker: Some(Marker::Reply),
@@ -593,7 +593,7 @@ impl EventBuilder {
                 }
 
                 // ID and author
-                tags.push(Tag::from_standardized(TagStandard::Event {
+                tags.push(Tag::from(TagStandard::Event {
                     event_id: root.id,
                     relay_url,
                     marker: Some(Marker::Root),
@@ -604,7 +604,7 @@ impl EventBuilder {
             }
             // No root tag, add only reply_to tags
             None => {
-                tags.push(Tag::from_standardized(TagStandard::Event {
+                tags.push(Tag::from(TagStandard::Event {
                     event_id: reply_to.id,
                     relay_url,
                     marker: Some(Marker::Reply),
@@ -646,8 +646,8 @@ impl EventBuilder {
     /// let content: &str = "Lorem [ipsum][4] dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.\n\nRead more at #[3].";
     /// let tags = &[
     ///     Tag::identifier("lorem-ipsum".to_string()),
-    ///     Tag::from_standardized(TagStandard::Title("Lorem Ipsum".to_string())),
-    ///     Tag::from_standardized(TagStandard::PublishedAt(Timestamp::from(1296962229))),
+    ///     Tag::from(TagStandard::Title("Lorem Ipsum".to_string())),
+    ///     Tag::from(TagStandard::PublishedAt(Timestamp::from(1296962229))),
     ///     Tag::hashtag("placeholder".to_string()),
     ///     Tag::event(event_id),
     /// ];
@@ -669,7 +669,7 @@ impl EventBuilder {
         I: IntoIterator<Item = Contact>,
     {
         let tags = contacts.into_iter().map(|contact| {
-            Tag::from_standardized(TagStandard::PublicKey {
+            Tag::from(TagStandard::PublicKey {
                 public_key: contact.public_key,
                 relay_url: contact.relay_url,
                 alias: contact.alias,
@@ -686,15 +686,13 @@ impl EventBuilder {
     pub fn opentimestamps(event_id: EventId, relay_url: Option<RelayUrl>) -> Result<Self, Error> {
         let ots: String = nostr_ots::timestamp_event(&event_id.to_hex())?;
         Ok(
-            Self::new(Kind::OpenTimestamps, ots).tags([Tag::from_standardized(
-                TagStandard::Event {
-                    event_id,
-                    relay_url,
-                    marker: None,
-                    public_key: None,
-                    uppercase: false,
-                },
-            )]),
+            Self::new(Kind::OpenTimestamps, ots).tags([Tag::from(TagStandard::Event {
+                event_id,
+                relay_url,
+                marker: None,
+                public_key: None,
+                uppercase: false,
+            })]),
         )
     }
 
@@ -704,7 +702,7 @@ impl EventBuilder {
     pub fn repost(event: &Event, relay_url: Option<RelayUrl>) -> Self {
         if event.kind == Kind::TextNote {
             Self::new(Kind::Repost, event.as_json()).tags([
-                Tag::from_standardized(TagStandard::Event {
+                Tag::from(TagStandard::Event {
                     event_id: event.id,
                     relay_url,
                     marker: None,
@@ -722,7 +720,7 @@ impl EventBuilder {
                         .map(|c| Tag::coordinate(c, relay_url.clone())),
                 )
                 .tags([
-                    Tag::from_standardized(TagStandard::Event {
+                    Tag::from(TagStandard::Event {
                         event_id: event.id,
                         relay_url,
                         marker: None,
@@ -731,7 +729,7 @@ impl EventBuilder {
                         uppercase: false,
                     }),
                     Tag::public_key(event.pubkey),
-                    Tag::from_standardized(TagStandard::Kind {
+                    Tag::from(TagStandard::Kind {
                         kind: event.kind,
                         uppercase: false,
                     }),
@@ -844,15 +842,13 @@ impl EventBuilder {
         relay_url: Option<RelayUrl>,
         metadata: &Metadata,
     ) -> Self {
-        Self::new(Kind::ChannelMetadata, metadata.as_json()).tags([Tag::from_standardized(
-            TagStandard::Event {
-                event_id: channel_id,
-                relay_url,
-                marker: None,
-                public_key: None,
-                uppercase: false,
-            },
-        )])
+        Self::new(Kind::ChannelMetadata, metadata.as_json()).tags([Tag::from(TagStandard::Event {
+            event_id: channel_id,
+            relay_url,
+            marker: None,
+            public_key: None,
+            uppercase: false,
+        })])
     }
 
     /// Channel message
@@ -863,15 +859,13 @@ impl EventBuilder {
     where
         S: Into<String>,
     {
-        Self::new(Kind::ChannelMessage, content).tags([Tag::from_standardized(
-            TagStandard::Event {
-                event_id: channel_id,
-                relay_url: Some(relay_url),
-                marker: Some(Marker::Root),
-                public_key: None,
-                uppercase: false,
-            },
-        )])
+        Self::new(Kind::ChannelMessage, content).tags([Tag::from(TagStandard::Event {
+            event_id: channel_id,
+            relay_url: Some(relay_url),
+            marker: Some(Marker::Root),
+            public_key: None,
+            uppercase: false,
+        })])
     }
 
     /// Hide message
@@ -913,8 +907,8 @@ impl EventBuilder {
         S: Into<String>,
     {
         Self::new(Kind::Authentication, "").tags([
-            Tag::from_standardized(TagStandard::Challenge(challenge.into())),
-            Tag::from_standardized(TagStandard::Relay(relay)),
+            Tag::from(TagStandard::Challenge(challenge.into())),
+            Tag::from(TagStandard::Relay(relay)),
         ])
     }
 
@@ -966,14 +960,11 @@ impl EventBuilder {
     where
         S: Into<String>,
     {
-        Self::new(Kind::LiveEventMessage, content).tag(Tag::from_standardized(
-            TagStandard::Coordinate {
-                coordinate: Coordinate::new(Kind::LiveEvent, live_event_host)
-                    .identifier(live_event_id),
-                relay_url,
-                uppercase: false,
-            },
-        ))
+        Self::new(Kind::LiveEventMessage, content).tag(Tag::from(TagStandard::Coordinate {
+            coordinate: Coordinate::new(Kind::LiveEvent, live_event_host).identifier(live_event_id),
+            relay_url,
+            uppercase: false,
+        }))
     }
 
     /// Reporting
@@ -1035,15 +1026,13 @@ impl EventBuilder {
         S2: Into<String>,
     {
         let mut tags: Vec<Tag> = vec![
-            Tag::from_standardized(TagStandard::Bolt11(bolt11.into())),
-            Tag::from_standardized(TagStandard::Description(zap_request.as_json())),
+            Tag::from(TagStandard::Bolt11(bolt11.into())),
+            Tag::from(TagStandard::Description(zap_request.as_json())),
         ];
 
         // add preimage tag if provided
         if let Some(pre_image_tag) = preimage {
-            tags.push(Tag::from_standardized(TagStandard::Preimage(
-                pre_image_tag.into(),
-            )))
+            tags.push(Tag::from(TagStandard::Preimage(pre_image_tag.into())))
         }
 
         // add e tag
@@ -1095,7 +1084,7 @@ impl EventBuilder {
         }
 
         // add P tag
-        tags.push(Tag::from_standardized(TagStandard::PublicKey {
+        tags.push(Tag::from(TagStandard::PublicKey {
             public_key: zap_request.pubkey,
             relay_url: None,
             alias: None,
@@ -1144,22 +1133,20 @@ impl EventBuilder {
 
         // Set name tag
         if let Some(name) = name {
-            tags.push(Tag::from_standardized(TagStandard::Name(name.into())));
+            tags.push(Tag::from(TagStandard::Name(name.into())));
         }
 
         // Set description tag
         if let Some(description) = description {
-            tags.push(Tag::from_standardized(TagStandard::Description(
-                description.into(),
-            )));
+            tags.push(Tag::from(TagStandard::Description(description.into())));
         }
 
         // Set image tag
         if let Some(image) = image {
             let image_tag = if let Some(dimensions) = image_dimensions {
-                Tag::from_standardized(TagStandard::Image(image, Some(dimensions)))
+                Tag::from(TagStandard::Image(image, Some(dimensions)))
             } else {
-                Tag::from_standardized(TagStandard::Image(image, None))
+                Tag::from(TagStandard::Image(image, None))
             };
             tags.push(image_tag);
         }
@@ -1167,9 +1154,9 @@ impl EventBuilder {
         // Set thumbnail tags
         for (thumb, dimensions) in thumbnails.into_iter() {
             let thumb_tag = if let Some(dimensions) = dimensions {
-                Tag::from_standardized(TagStandard::Thumb(thumb, Some(dimensions)))
+                Tag::from(TagStandard::Thumb(thumb, Some(dimensions)))
             } else {
-                Tag::from_standardized(TagStandard::Thumb(thumb, None))
+                Tag::from(TagStandard::Thumb(thumb, None))
             };
             tags.push(thumb_tag);
         }
@@ -1197,7 +1184,7 @@ impl EventBuilder {
         let mut tags = Vec::with_capacity(1);
 
         // Add identity tag
-        tags.push(Tag::from_standardized(TagStandard::Coordinate {
+        tags.push(Tag::from(TagStandard::Coordinate {
             coordinate: Coordinate::new(Kind::BadgeDefinition, badge_definition.pubkey)
                 .identifier(badge_id),
             relay_url: None,
@@ -1275,7 +1262,7 @@ impl EventBuilder {
                 ((_, identifier), (badge_award_event, badge_id, a_tag, relay_url))
                     if badge_id == identifier =>
                 {
-                    let badge_award_event_tag: Tag = Tag::from_standardized(TagStandard::Event {
+                    let badge_award_event_tag: Tag = Tag::from(TagStandard::Event {
                         event_id: badge_award_event.id,
                         relay_url: relay_url.clone(),
                         marker: None,
@@ -1347,8 +1334,8 @@ impl EventBuilder {
         tags.extend_from_slice(&[
             Tag::event(job_request.id),
             Tag::public_key(job_request.pubkey),
-            Tag::from_standardized(TagStandard::Request(job_request)),
-            Tag::from_standardized(TagStandard::Amount { millisats, bolt11 }),
+            Tag::from(TagStandard::Request(job_request)),
+            Tag::from(TagStandard::Amount { millisats, bolt11 }),
         ]);
 
         Ok(Self::new(kind, payload).tags(tags))
@@ -1362,15 +1349,13 @@ impl EventBuilder {
 
         tags.push(Tag::event(data.job_request_id));
         tags.push(Tag::public_key(data.customer_public_key));
-        tags.push(Tag::from_standardized(
-            TagStandard::DataVendingMachineStatus {
-                status: data.status,
-                extra_info: data.extra_info,
-            },
-        ));
+        tags.push(Tag::from(TagStandard::DataVendingMachineStatus {
+            status: data.status,
+            extra_info: data.extra_info,
+        }));
 
         if let Some(millisats) = data.amount_msat {
-            tags.push(Tag::from_standardized(TagStandard::Amount {
+            tags.push(Tag::from(TagStandard::Amount {
                 millisats,
                 bolt11: data.bolt11,
             }));
@@ -1590,7 +1575,7 @@ impl EventBuilder {
         Self::new(Kind::BlossomServerList, "").tags(
             servers
                 .into_iter()
-                .map(|s| Tag::from_standardized(TagStandard::Server(s))),
+                .map(|s| Tag::from(TagStandard::Server(s))),
         )
     }
 
@@ -1624,11 +1609,8 @@ impl EventBuilder {
     where
         I: IntoIterator<Item = RelayUrl>,
     {
-        Self::new(Kind::BlockedRelays, "").tags(
-            relay
-                .into_iter()
-                .map(|r| Tag::from_standardized(TagStandard::Relay(r))),
-        )
+        Self::new(Kind::BlockedRelays, "")
+            .tags(relay.into_iter().map(|r| Tag::from(TagStandard::Relay(r))))
     }
 
     /// Search relays
@@ -1639,11 +1621,8 @@ impl EventBuilder {
     where
         I: IntoIterator<Item = RelayUrl>,
     {
-        Self::new(Kind::SearchRelays, "").tags(
-            relay
-                .into_iter()
-                .map(|r| Tag::from_standardized(TagStandard::Relay(r))),
-        )
+        Self::new(Kind::SearchRelays, "")
+            .tags(relay.into_iter().map(|r| Tag::from(TagStandard::Relay(r))))
     }
 
     /// Interests
@@ -1689,11 +1668,8 @@ impl EventBuilder {
     {
         let tags: Vec<Tag> = vec![Tag::identifier(identifier)];
         Self::new(Kind::RelaySet, "").tags(
-            tags.into_iter().chain(
-                relays
-                    .into_iter()
-                    .map(|r| Tag::from_standardized(TagStandard::Relay(r))),
-            ),
+            tags.into_iter()
+                .chain(relays.into_iter().map(|r| Tag::from(TagStandard::Relay(r)))),
         )
     }
 
@@ -1763,9 +1739,9 @@ impl EventBuilder {
         let tags: Vec<Tag> = vec![Tag::identifier(identifier)];
         Self::new(Kind::EmojiSet, "").tags(
             tags.into_iter().chain(
-                emojis.into_iter().map(|(s, url)| {
-                    Tag::from_standardized(TagStandard::Emoji { shortcode: s, url })
-                }),
+                emojis
+                    .into_iter()
+                    .map(|(s, url)| Tag::from(TagStandard::Emoji { shortcode: s, url })),
             ),
         )
     }
@@ -1781,8 +1757,8 @@ impl EventBuilder {
         let namespace: String = namespace.into();
         let label: String = label.into();
         Self::new(Kind::Label, "").tags([
-            Tag::from_standardized(TagStandard::LabelNamespace(namespace.clone())),
-            Tag::from_standardized(TagStandard::Label {
+            Tag::from(TagStandard::LabelNamespace(namespace.clone())),
+            Tag::from(TagStandard::Label {
                 value: label,
                 namespace: Some(namespace),
             }),
@@ -1920,7 +1896,7 @@ impl EventBuilder {
         }
 
         Ok(
-            Self::new(Kind::ChatMessage, content).tag(Tag::from_standardized(TagStandard::Quote {
+            Self::new(Kind::ChatMessage, content).tag(Tag::from(TagStandard::Quote {
                 event_id: reply_to.id,
                 relay_url,
                 public_key: Some(reply_to.pubkey),
@@ -1938,7 +1914,7 @@ impl EventBuilder {
     {
         let mut builder = Self::new(Kind::Thread, content);
         if let Some(t) = title {
-            builder = builder.tag(Tag::from_standardized(TagStandard::Title(t)));
+            builder = builder.tag(Tag::from(TagStandard::Title(t)));
         }
         builder
     }
@@ -1952,14 +1928,14 @@ impl EventBuilder {
         S: Into<String>,
     {
         let tags = vec![
-            Tag::from_standardized(TagStandard::Event {
+            Tag::from(TagStandard::Event {
                 event_id: reply_to.id,
                 relay_url,
                 marker: None,
                 public_key: Some(reply_to.pubkey),
                 uppercase: true,
             }),
-            Tag::from_standardized(TagStandard::Kind {
+            Tag::from(TagStandard::Kind {
                 kind: Kind::Thread,
                 uppercase: true,
             }),

@@ -1,8 +1,4 @@
-// Copyright (c) 2022-2023 Yuki Kishimoto
-// Copyright (c) 2023-2025 Rust Nostr Developers
-// Distributed under the MIT software license
-
-//! NIP01: Basic protocol flow description
+//! NIP-01: Basic protocol flow description
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/01.md>
 
@@ -19,18 +15,34 @@ use serde_json::Value;
 
 use super::nip19::{self, FromBech32, Nip19Coordinate, ToBech32};
 use super::nip21::{FromNostrUri, ToNostrUri};
-use crate::types::Url;
-use crate::{Filter, JsonUtil, Kind, PublicKey, Tag, key};
+use crate::types::url::{self, Url};
+use crate::{EventId, Filter, JsonUtil, Kind, PublicKey, RelayUrl, Tag, event, key};
 
-/// Raw Event error
+/// NIP-01 error
 #[derive(Debug, PartialEq)]
 pub enum Error {
     /// Keys error
     Keys(key::Error),
+    /// Event error
+    Event(event::Error),
+    /// Url error
+    Url(url::Error),
     /// Parse Int error
     ParseInt(ParseIntError),
     /// Invalid coordinate
     InvalidCoordinate,
+    /// Missing tag kind
+    MissingTagKind,
+    /// Missing event ID
+    MissingEventId,
+    /// Missing coordinate
+    MissingCoordinate,
+    /// Missing public key
+    MissingPublicKey,
+    /// Missing identifier
+    MissingIdentifier,
+    /// Unknown standardized tag
+    UnknownStandardizedTag,
 }
 
 #[cfg(feature = "std")]
@@ -40,8 +52,16 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Keys(e) => e.fmt(f),
+            Self::Event(e) => e.fmt(f),
+            Self::Url(e) => e.fmt(f),
             Self::ParseInt(e) => e.fmt(f),
             Self::InvalidCoordinate => f.write_str("Invalid coordinate"),
+            Self::MissingTagKind => f.write_str("Missing tag kind"),
+            Self::MissingEventId => f.write_str("Missing event ID"),
+            Self::MissingCoordinate => f.write_str("Missing coordinate"),
+            Self::MissingPublicKey => f.write_str("Missing public key"),
+            Self::MissingIdentifier => f.write_str("Missing identifier"),
+            Self::UnknownStandardizedTag => f.write_str("Unknown standardized tag"),
         }
     }
 }
@@ -49,6 +69,18 @@ impl fmt::Display for Error {
 impl From<key::Error> for Error {
     fn from(e: key::Error) -> Self {
         Self::Keys(e)
+    }
+}
+
+impl From<event::Error> for Error {
+    fn from(e: event::Error) -> Self {
+        Self::Event(e)
+    }
+}
+
+impl From<url::Error> for Error {
+    fn from(e: url::Error) -> Self {
+        Self::Url(e)
     }
 }
 
@@ -181,8 +213,9 @@ fn verify_coordinate(kind: &Kind, identifier: &str) -> Result<(), Error> {
 }
 
 impl From<Coordinate> for Tag {
+    #[inline]
     fn from(coordinate: Coordinate) -> Self {
-        Self::coordinate(coordinate, None)
+        Self::coordinate(coordinate)
     }
 }
 
@@ -495,6 +528,251 @@ where
     deserializer.deserialize_map(GenericTagsVisitor)
 }
 
+/// Standardized NIP-01 tags
+///
+/// <https://github.com/nostr-protocol/nips/blob/master/01.md>
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TagStandardNip01 {
+    /// `a` tag
+    Coordinate {
+        /// Coordinate
+        coordinate: Coordinate,
+        /// Relay hint (optional but recommended)
+        relay_hint: Option<RelayUrl>,
+    },
+    /// `e` tag
+    Event {
+        /// Event ID
+        id: EventId,
+        /// Relay hint (optional but recommended)
+        relay_hint: Option<RelayUrl>,
+        /// Public key hint
+        public_key: Option<PublicKey>,
+    },
+    /// `d` tag
+    Identifier(String),
+    /// `p` tag
+    PublicKey {
+        /// Public key
+        public_key: PublicKey,
+        /// Relay hint (optional but recommended)
+        relay_hint: Option<RelayUrl>,
+    },
+}
+
+impl TagStandardNip01 {
+    pub fn parse<T, S>(tag: T) -> Result<Self, Error>
+    where
+        T: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        // Take iterator
+        let mut iter = tag.into_iter();
+
+        // Extract first value
+        let kind: S = iter.next().ok_or(Error::MissingTagKind)?;
+
+        // Match kind
+        match kind.as_ref() {
+            // Parse as "a" tag
+            "a" => {
+                let (coordinate, relay_hint) = parse_a_tag(iter)?;
+                Ok(Self::Coordinate {
+                    coordinate,
+                    relay_hint,
+                })
+            }
+            // Parse as "e" tag
+            "e" => {
+                let (id, relay_hint, public_key) = parse_e_tag(iter)?;
+                Ok(Self::Event {
+                    id,
+                    relay_hint,
+                    public_key,
+                })
+            }
+            "d" => {
+                let identifier: S = iter.next().ok_or(Error::MissingIdentifier)?;
+                Ok(Self::Identifier(identifier.as_ref().to_string()))
+            }
+            // Parse as "p" tag
+            "p" => {
+                let (public_key, relay_hint) = parse_p_tag(iter)?;
+                Ok(Self::PublicKey {
+                    public_key,
+                    relay_hint,
+                })
+            }
+            _ => Err(Error::UnknownStandardizedTag),
+        }
+    }
+
+    /// Serialize the standardized tag to a raw tag
+    pub fn as_raw(&self) -> Tag {
+        match self {
+            Self::Coordinate {
+                coordinate,
+                relay_hint,
+            } => {
+                let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
+
+                tag.push(String::from("a"));
+                tag.push(coordinate.to_string());
+
+                if let Some(relay_hint) = relay_hint {
+                    tag.push(relay_hint.to_string());
+                }
+
+                assert!(tag.len() >= 2);
+
+                Tag::new(tag)
+            }
+            Self::Event {
+                id,
+                relay_hint,
+                public_key,
+            } => {
+                let mut tag: Vec<String> = Vec::with_capacity(
+                    2 + relay_hint.is_some() as usize + public_key.is_some() as usize,
+                );
+
+                tag.push(String::from("e"));
+                tag.push(id.to_hex());
+
+                match relay_hint {
+                    Some(relay_hint) => tag.push(relay_hint.to_string()),
+                    None => {
+                        if public_key.is_some() {
+                            tag.push(String::new());
+                        }
+                    }
+                }
+
+                if let Some(public_key) = public_key {
+                    tag.push(public_key.to_string());
+                }
+
+                assert!(tag.len() >= 2);
+
+                Tag::new(tag)
+            }
+            Self::Identifier(identifier) => {
+                let mut tag: Vec<String> = Vec::with_capacity(2);
+
+                tag.push(String::from("d"));
+                tag.push(identifier.to_string());
+
+                assert_eq!(tag.len(), 2);
+
+                Tag::new(tag)
+            }
+            Self::PublicKey {
+                public_key,
+                relay_hint,
+            } => {
+                let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
+
+                tag.push(String::from("p"));
+                tag.push(public_key.to_hex());
+
+                if let Some(relay_hint) = relay_hint {
+                    tag.push(relay_hint.to_string());
+                }
+
+                assert!(tag.len() >= 2);
+
+                Tag::new(tag)
+            }
+        }
+    }
+}
+
+impl From<TagStandardNip01> for Tag {
+    #[inline]
+    fn from(standard: TagStandardNip01) -> Self {
+        standard.as_raw()
+    }
+}
+
+fn take_and_parse_relay_hint<T, S>(iter: &mut T) -> Result<Option<RelayUrl>, Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    match iter.next() {
+        Some(url) => {
+            let url: &str = url.as_ref();
+
+            if url.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(RelayUrl::parse(url)?))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn parse_a_tag<T, S>(mut iter: T) -> Result<(Coordinate, Option<RelayUrl>), Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    // Take and parse coordinate (index 1)
+    let coordinate: S = iter.next().ok_or(Error::MissingCoordinate)?;
+    let coordinate: Coordinate = Coordinate::from_kpi_format(coordinate.as_ref())?;
+
+    // Take and parse relay hint (index 2)
+    let relay_hint: Option<RelayUrl> = take_and_parse_relay_hint(&mut iter)?;
+
+    Ok((coordinate, relay_hint))
+}
+
+fn parse_e_tag<T, S>(mut iter: T) -> Result<(EventId, Option<RelayUrl>, Option<PublicKey>), Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    // Take and parse event ID (index 1)
+    let id: S = iter.next().ok_or(Error::MissingEventId)?;
+    let id: EventId = EventId::from_hex(id.as_ref())?;
+
+    // Take and parse relay hint (index 2)
+    let relay_hint: Option<RelayUrl> = take_and_parse_relay_hint(&mut iter)?;
+
+    // Take and parse public key (index 3)
+    let public_key: Option<S> = iter.next();
+    let public_key: Option<PublicKey> = match public_key {
+        Some(pk) => {
+            let pk: &str = pk.as_ref();
+
+            if pk.is_empty() {
+                None
+            } else {
+                Some(PublicKey::from_hex(pk)?)
+            }
+        }
+        None => None,
+    };
+
+    Ok((id, relay_hint, public_key))
+}
+
+fn parse_p_tag<T, S>(mut iter: T) -> Result<(PublicKey, Option<RelayUrl>), Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    // Take and parse public key (index 1)
+    let public_key: S = iter.next().ok_or(Error::MissingPublicKey)?;
+    let public_key: PublicKey = PublicKey::from_hex(public_key.as_ref())?;
+
+    // Take and parse relay hint (index 2)
+    let relay_hint: Option<RelayUrl> = take_and_parse_relay_hint(&mut iter)?;
+
+    Ok((public_key, relay_hint))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +898,198 @@ mod tests {
             coordinate.to_string(),
             "10000:00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9:"
         )
+    }
+
+    #[test]
+    fn test_standardized_a_tag() {
+        let raw = "30617:00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9:n34";
+        let coordinate = Coordinate::from_kpi_format(raw).unwrap();
+
+        // Simple
+        let tag = vec!["a", raw];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Coordinate {
+                coordinate: coordinate.clone(),
+                relay_hint: None
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // With relay hint
+        let tag = vec!["a", raw, "wss://relay.damus.io/"];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Coordinate {
+                coordinate,
+                relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap())
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // Invalid coordinate
+        let tag = vec!["a", "hello"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::InvalidCoordinate);
+
+        // Missing coordinate
+        let tag = vec!["a"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::MissingCoordinate);
+    }
+
+    #[test]
+    fn test_standardized_e_tag() {
+        let raw = "a3ce0a22c5c25e5a41a17004d38ed2aa8f815dda918c92400c6b611c41acbc78";
+        let id = EventId::from_hex(raw).unwrap();
+
+        // Simple
+        let tag = vec!["e", raw];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Event {
+                id,
+                relay_hint: None,
+                public_key: None
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // With relay hint
+        let tag = vec!["e", raw, "wss://relay.damus.io/"];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Event {
+                id,
+                relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap()),
+                public_key: None
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // With relay hint and public key
+        let tag = vec![
+            "e",
+            raw,
+            "wss://relay.damus.io/",
+            "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9",
+        ];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Event {
+                id,
+                relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap()),
+                public_key: Some(
+                    PublicKey::from_hex(
+                        "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9"
+                    )
+                    .unwrap()
+                )
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // With public key and no relay hint
+        let tag = vec![
+            "e",
+            raw,
+            "",
+            "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9",
+        ];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::Event {
+                id,
+                relay_hint: None,
+                public_key: Some(
+                    PublicKey::from_hex(
+                        "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9"
+                    )
+                    .unwrap()
+                )
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // Invalid ID
+        let tag = vec!["e", "hello"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::Event(event::Error::InvalidId));
+
+        // Missing ID
+        let tag = vec!["e"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::MissingEventId);
+
+        // Issue: https://gitworkshop.dev/yukikishimoto.com/nostr/issues/note15xl8ae8dnmt26adfw6ec8gshxxs242vrvsa3v36ctwq2x9gglkustlxlwa
+        let result = TagStandardNip01::parse(&["e", raw, "", "", ""]).unwrap();
+        assert_eq!(
+            result,
+            TagStandardNip01::Event {
+                id,
+                relay_hint: None,
+                public_key: None,
+            }
+        )
+    }
+
+    #[test]
+    fn test_standardized_d_tag() {
+        let tag = vec!["d", "raw"];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(parsed, TagStandardNip01::Identifier(String::from("raw")));
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // Missing identifier
+        let tag = vec!["d"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::MissingIdentifier);
+    }
+
+    #[test]
+    fn test_standardized_p_tag() {
+        let raw = "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9";
+        let public_key = PublicKey::from_hex(raw).unwrap();
+
+        // Simple
+        let tag = vec!["p", raw];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::PublicKey {
+                public_key,
+                relay_hint: None
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // With relay hint
+        let tag = vec!["p", raw, "wss://relay.damus.io/"];
+        let parsed = TagStandardNip01::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            TagStandardNip01::PublicKey {
+                public_key,
+                relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap())
+            }
+        );
+        assert_eq!(parsed.as_raw(), Tag::parse(tag).unwrap());
+
+        // Invalid public key
+        let tag = vec!["p", "hello"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::Keys(key::Error::InvalidPublicKey));
+
+        // Missing public key
+        let tag = vec!["p"];
+        let err = TagStandardNip01::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::MissingPublicKey);
     }
 }
 
