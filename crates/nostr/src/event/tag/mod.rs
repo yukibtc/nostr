@@ -32,6 +32,7 @@ use crate::nips::nip01::{Coordinate, Nip01Tag};
 use crate::nips::nip10::Marker;
 use crate::nips::nip40::Nip40Tag;
 use crate::nips::nip56::Report;
+use crate::nips::nip70::Nip70Tag;
 use crate::types::Url;
 use crate::{ImageDimensions, PublicKey, RelayUrl, SingleLetterTag, Timestamp};
 
@@ -409,7 +410,7 @@ impl Tag {
     /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
     #[inline]
     pub fn protected() -> Self {
-        Self::from_standardized(TagStandard::Protected)
+        Nip70Tag::Protected.to_tag()
     }
 
     /// A short human-readable plaintext summary of what that event is about
@@ -468,7 +469,8 @@ impl Tag {
     /// <https://github.com/nostr-protocol/nips/blob/master/70.md>
     #[inline]
     pub fn is_protected(&self) -> bool {
-        matches!(self.standardized(), Some(TagStandard::Protected))
+        // TODO: replace with a simple self.buf == ["-"] check?
+        matches!(Nip70Tag::try_from(self), Ok(Nip70Tag::Protected))
     }
 }
 
