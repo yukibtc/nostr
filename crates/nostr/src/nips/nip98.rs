@@ -9,6 +9,7 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/98.md>
 
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
@@ -19,29 +20,34 @@ use base64::engine::{Engine, general_purpose};
 use hashes::Hash;
 use hashes::sha256::Hash as Sha256Hash;
 
+use crate::Url;
 #[cfg(all(feature = "std", feature = "rand"))]
 use crate::event::EventBuilder;
+use crate::event::tag::{Tag, TagCodec, impl_tag_codec_conversions};
 #[cfg(feature = "std")]
 use crate::event::{self, Event, builder};
 #[cfg(all(feature = "std", feature = "rand"))]
 use crate::signer::{AsyncGetPublicKey, AsyncSignEvent};
+use crate::types::url;
 #[cfg(feature = "std")]
 use crate::util::JsonUtil;
 #[cfg(feature = "std")]
-use crate::{Kind, PublicKey, TagKind, Timestamp};
-use crate::{Tag, TagStandard, Url};
+use crate::{Kind, PublicKey, Timestamp};
 
 #[cfg(feature = "std")]
 const AUTH_HEADER_PREFIX: &str = "Nostr";
+const ABSOLUTE_URL: &str = "u";
+const METHOD: &str = "method";
+const PAYLOAD: &str = "payload";
 
 /// [`HttpData`] required tags
 #[derive(Debug, PartialEq, Eq)]
 pub enum RequiredTags {
-    /// [`TagStandard::AbsoluteURL`]
+    /// `u`
     AbsoluteURL,
-    /// [`TagStandard::Method`]
+    /// `method`
     Method,
-    /// [`TagStandard::Payload`]
+    /// `payload`
     Payload,
 }
 
@@ -67,6 +73,8 @@ pub enum Error {
     /// Event builder error
     #[cfg(feature = "std")]
     EventBuilder(builder::Error),
+    /// URL parse error
+    Url(url::ParseError),
     /// Tag missing when parsing
     MissingTag(RequiredTags),
     /// Invalid HTTP Method
@@ -116,6 +124,7 @@ impl fmt::Display for Error {
             Self::Event(e) => e.fmt(f),
             #[cfg(feature = "std")]
             Self::EventBuilder(e) => e.fmt(f),
+            Self::Url(e) => e.fmt(f),
             Self::MissingTag(tag) => write!(f, "missing '{tag}' tag"),
             Self::UnknownMethod => f.write_str("Unknown HTTP method"),
             #[cfg(feature = "std")]
@@ -147,6 +156,12 @@ impl fmt::Display for Error {
             #[cfg(feature = "std")]
             Self::PayloadHashMismatch => f.write_str("payload hash doesn't match the body hash"),
         }
+    }
+}
+
+impl From<url::ParseError> for Error {
+    fn from(e: url::ParseError) -> Self {
+        Self::Url(e)
     }
 }
 
@@ -231,6 +246,65 @@ pub struct HttpData {
     pub payload: Option<Sha256Hash>,
 }
 
+/// NIP-98 tags
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Nip98Tag {
+    /// `u` tag
+    AbsoluteURL(Url),
+    /// `method` tag
+    Method(HttpMethod),
+    /// `payload` tag
+    Payload(Sha256Hash),
+}
+
+impl TagCodec for Nip98Tag {
+    type Error = Error;
+
+    fn parse<I, S>(tag: I) -> Result<Self, Self::Error>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut iter = tag.into_iter();
+        let kind: S = iter
+            .next()
+            .ok_or(Error::MissingTag(RequiredTags::AbsoluteURL))?;
+
+        match kind.as_ref() {
+            ABSOLUTE_URL => {
+                let url: S = iter
+                    .next()
+                    .ok_or(Error::MissingTag(RequiredTags::AbsoluteURL))?;
+                Ok(Self::AbsoluteURL(Url::parse(url.as_ref())?))
+            }
+            METHOD => {
+                let method: S = iter.next().ok_or(Error::MissingTag(RequiredTags::Method))?;
+                Ok(Self::Method(HttpMethod::from_str(method.as_ref())?))
+            }
+            PAYLOAD => {
+                let payload: S = iter
+                    .next()
+                    .ok_or(Error::MissingTag(RequiredTags::Payload))?;
+                Ok(Self::Payload(
+                    Sha256Hash::from_str(payload.as_ref())
+                        .map_err(|_| Error::MissingTag(RequiredTags::Payload))?,
+                ))
+            }
+            _ => Err(Error::MissingTag(RequiredTags::AbsoluteURL)),
+        }
+    }
+
+    fn to_tag(&self) -> Tag {
+        match self {
+            Self::AbsoluteURL(url) => Tag::new(vec![String::from(ABSOLUTE_URL), url.to_string()]),
+            Self::Method(method) => Tag::new(vec![String::from(METHOD), method.to_string()]),
+            Self::Payload(payload) => Tag::new(vec![String::from(PAYLOAD), payload.to_string()]),
+        }
+    }
+}
+
+impl_tag_codec_conversions!(Nip98Tag);
+
 impl HttpData {
     /// New [`HttpData`]
     #[inline]
@@ -272,11 +346,11 @@ impl From<HttpData> for Vec<Tag> {
         } = data;
 
         let mut tags: Vec<Tag> = vec![
-            Tag::from_standardized(TagStandard::AbsoluteURL(url)),
-            Tag::from_standardized(TagStandard::Method(method)),
+            Nip98Tag::AbsoluteURL(url).to_tag(),
+            Nip98Tag::Method(method).to_tag(),
         ];
         if let Some(payload) = payload {
-            tags.push(Tag::from_standardized(TagStandard::Payload(payload)));
+            tags.push(Nip98Tag::Payload(payload).to_tag());
         }
 
         tags
@@ -287,28 +361,22 @@ impl TryFrom<Vec<Tag>> for HttpData {
     type Error = Error;
 
     fn try_from(value: Vec<Tag>) -> Result<Self, Self::Error> {
-        let url = value
-            .iter()
-            .find_map(|t| match t.standardized() {
-                Some(TagStandard::AbsoluteURL(u)) => Some(u),
-                _ => None,
-            })
-            .ok_or(Error::MissingTag(RequiredTags::AbsoluteURL))?;
-        let method = value
-            .iter()
-            .find_map(|t| match t.standardized() {
-                Some(TagStandard::Method(m)) => Some(m),
-                _ => None,
-            })
-            .ok_or(Error::MissingTag(RequiredTags::Method))?;
-        let payload = value.iter().find_map(|t| match t.standardized() {
-            Some(TagStandard::Payload(p)) => Some(p),
-            _ => None,
-        });
+        let mut url: Option<Url> = None;
+        let mut method: Option<HttpMethod> = None;
+        let mut payload: Option<Sha256Hash> = None;
+
+        for tag in value.into_iter() {
+            match Nip98Tag::try_from(tag) {
+                Ok(Nip98Tag::AbsoluteURL(value)) => url = Some(value),
+                Ok(Nip98Tag::Method(value)) => method = Some(value),
+                Ok(Nip98Tag::Payload(value)) => payload = Some(value),
+                Err(_) => (),
+            }
+        }
 
         Ok(Self {
-            url,
-            method,
+            url: url.ok_or(Error::MissingTag(RequiredTags::AbsoluteURL))?,
+            method: method.ok_or(Error::MissingTag(RequiredTags::Method))?,
             payload,
         })
     }
@@ -358,23 +426,9 @@ pub fn verify_auth_header(
         return Err(Error::WrongAuthHeaderKind);
     }
 
-    let authorized_url: Url = event
-        .tags
-        .find_standardized(TagKind::u())
-        .and_then(|tag| match tag {
-            TagStandard::AbsoluteURL(u) => Some(u),
-            _ => None,
-        })
-        .ok_or(Error::MissingTag(RequiredTags::AbsoluteURL))?;
-
-    let authorized_method: HttpMethod = event
-        .tags
-        .find_standardized(TagKind::Method)
-        .and_then(|tag| match tag {
-            TagStandard::Method(u) => Some(u),
-            _ => None,
-        })
-        .ok_or(Error::MissingTag(RequiredTags::Method))?;
+    let http_data = HttpData::try_from(event.tags.iter().cloned().collect::<Vec<Tag>>())?;
+    let authorized_url: Url = http_data.url;
+    let authorized_method: HttpMethod = http_data.method;
 
     if &authorized_url != url || authorized_method != method {
         return Err(Error::AuthorizationNotMatchRequest {
@@ -397,9 +451,9 @@ pub fn verify_auth_header(
 
     if let Some(body_data) = body {
         // Get payload hash
-        let payload: Sha256Hash = match event.tags.find_standardized(TagKind::Payload) {
-            Some(TagStandard::Payload(p)) => p,
-            _ => return Err(Error::MissingTag(RequiredTags::Payload)),
+        let payload: Sha256Hash = match http_data.payload {
+            Some(p) => p,
+            None => return Err(Error::MissingTag(RequiredTags::Payload)),
         };
 
         // Hash body data
@@ -445,6 +499,52 @@ impl TimeDelta {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_nip98_tag_codec() {
+        let url = Nip98Tag::parse(["u", "https://example.com/"]).unwrap();
+        assert_eq!(
+            url,
+            Nip98Tag::AbsoluteURL(Url::parse("https://example.com/").unwrap())
+        );
+        assert_eq!(
+            url.to_tag(),
+            Tag::parse(["u", "https://example.com/"]).unwrap()
+        );
+
+        let method = Nip98Tag::parse(["method", "GET"]).unwrap();
+        assert_eq!(method, Nip98Tag::Method(HttpMethod::GET));
+        assert_eq!(method.to_tag(), Tag::parse(["method", "GET"]).unwrap());
+
+        let payload_hash = Sha256Hash::from_str(
+            "12f8ff0f5f6f023a4ae796a5f5f6d9030434bf2b9bb7a2f4f0f0f971b3e5d79f",
+        )
+        .unwrap();
+        let payload = Nip98Tag::parse([
+            "payload",
+            "12f8ff0f5f6f023a4ae796a5f5f6d9030434bf2b9bb7a2f4f0f0f971b3e5d79f",
+        ])
+        .unwrap();
+        assert_eq!(payload, Nip98Tag::Payload(payload_hash));
+    }
+
+    #[test]
+    fn test_nip98_http_data_round_trip() {
+        let payload = Sha256Hash::from_str(
+            "12f8ff0f5f6f023a4ae796a5f5f6d9030434bf2b9bb7a2f4f0f0f971b3e5d79f",
+        )
+        .unwrap();
+        let data = HttpData::new(
+            Url::parse("https://example.com/").unwrap(),
+            HttpMethod::POST,
+        )
+        .payload(payload);
+
+        let tags: Vec<Tag> = data.clone().into();
+        let parsed = HttpData::try_from(tags).unwrap();
+
+        assert_eq!(parsed, data);
+    }
 
     #[test]
     fn empty_auth_header() {
