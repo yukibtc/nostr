@@ -7,8 +7,10 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/57.md>
 
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
+use core::num::ParseIntError;
 
 use aes::Aes256;
 #[cfg(feature = "rand")]
@@ -36,11 +38,10 @@ use super::nip01::Coordinate;
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::SECP256K1;
 use crate::event::builder::Error as BuilderError;
+use crate::event::tag::{Tag, TagCodec, impl_tag_codec_conversions};
 use crate::key::Error as KeyError;
-use crate::{
-    Event, EventId, JsonUtil, PublicKey, RelayUrl, SecretKey, Tag, TagStandard, Timestamp, event,
-    util,
-};
+use crate::types::url;
+use crate::{Event, EventId, JsonUtil, PublicKey, RelayUrl, SecretKey, Timestamp, event, util};
 #[cfg(feature = "rand")]
 use crate::{EventBuilder, Keys, Kind};
 
@@ -50,6 +51,13 @@ type Aes256CbcDec = Decryptor<Aes256>;
 
 const PRIVATE_ZAP_MSG_BECH32_PREFIX: Hrp = Hrp::parse_unchecked("pzap");
 const PRIVATE_ZAP_IV_BECH32_PREFIX: Hrp = Hrp::parse_unchecked("iv");
+const ANON: &str = "anon";
+const AMOUNT: &str = "amount";
+const BOLT11: &str = "bolt11";
+const DESCRIPTION: &str = "description";
+const LNURL: &str = "lnurl";
+const PREIMAGE: &str = "preimage";
+const RELAYS: &str = "relays";
 
 #[allow(missing_docs)]
 #[derive(Debug)]
@@ -57,10 +65,19 @@ pub enum Error {
     Key(KeyError),
     Builder(BuilderError),
     Event(event::Error),
+    Url(url::Error),
+    ParseInt(ParseIntError),
     Bech32Decode(bech32::DecodeError),
     Bech32Encode(bech32::EncodeError),
+    MissingTagKind,
+    MissingAmount,
+    MissingBolt11,
+    MissingDescription,
+    MissingLnurl,
+    MissingPreimage,
     InvalidPrivateZapMessage,
     PrivateZapMessageNotFound,
+    UnknownTag,
     /// Wrong prefix or variant
     WrongBech32Prefix,
     /// Wrong encryption block mode
@@ -75,10 +92,19 @@ impl fmt::Display for Error {
             Self::Key(e) => e.fmt(f),
             Self::Builder(e) => e.fmt(f),
             Self::Event(e) => e.fmt(f),
+            Self::Url(e) => e.fmt(f),
+            Self::ParseInt(e) => e.fmt(f),
             Self::Bech32Decode(e) => e.fmt(f),
             Self::Bech32Encode(e) => e.fmt(f),
+            Self::MissingTagKind => f.write_str("Missing tag kind"),
+            Self::MissingAmount => f.write_str("Missing amount"),
+            Self::MissingBolt11 => f.write_str("Missing bolt11"),
+            Self::MissingDescription => f.write_str("Missing description"),
+            Self::MissingLnurl => f.write_str("Missing lnurl"),
+            Self::MissingPreimage => f.write_str("Missing preimage"),
             Self::InvalidPrivateZapMessage => f.write_str("Invalid private zap message"),
             Self::PrivateZapMessageNotFound => f.write_str("Private zap message not found"),
+            Self::UnknownTag => f.write_str("Unknown tag"),
             Self::WrongBech32Prefix => f.write_str("Wrong bech32 prefix"),
             Self::WrongBlockMode => f.write_str(
                 "Wrong encryption block mode. The content must be encrypted using CBC mode!",
@@ -105,10 +131,152 @@ impl From<event::Error> for Error {
     }
 }
 
+impl From<url::Error> for Error {
+    fn from(e: url::Error) -> Self {
+        Self::Url(e)
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(e: ParseIntError) -> Self {
+        Self::ParseInt(e)
+    }
+}
+
 impl From<bech32::DecodeError> for Error {
     fn from(e: bech32::DecodeError) -> Self {
         Self::Bech32Decode(e)
     }
+}
+
+/// Standardized NIP-57 tags
+///
+/// <https://github.com/nostr-protocol/nips/blob/master/57.md>
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Nip57Tag {
+    /// `relays` tag
+    Relays(Vec<RelayUrl>),
+    /// `amount` tag
+    Amount {
+        /// Amount in millisats
+        millisats: u64,
+        /// Optional bolt11 invoice
+        bolt11: Option<String>,
+    },
+    /// `lnurl` tag
+    Lnurl(String),
+    /// `anon` tag
+    Anon {
+        /// Optional private zap payload
+        msg: Option<String>,
+    },
+    /// `bolt11` tag
+    Bolt11(String),
+    /// `description` tag
+    Description(String),
+    /// `preimage` tag
+    Preimage(String),
+}
+
+impl TagCodec for Nip57Tag {
+    type Error = Error;
+
+    fn parse<I, S>(tag: I) -> Result<Self, Self::Error>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut iter = tag.into_iter();
+        let kind: S = iter.next().ok_or(Error::MissingTagKind)?;
+
+        match kind.as_ref() {
+            RELAYS => Ok(Self::Relays(parse_relays(iter)?)),
+            AMOUNT => parse_amount_tag(iter),
+            LNURL => {
+                let lnurl: S = iter.next().ok_or(Error::MissingLnurl)?;
+                Ok(Self::Lnurl(lnurl.as_ref().to_string()))
+            }
+            ANON => {
+                let msg: Option<String> = match iter.next() {
+                    Some(msg) if !msg.as_ref().is_empty() => Some(msg.as_ref().to_string()),
+                    _ => None,
+                };
+                Ok(Self::Anon { msg })
+            }
+            BOLT11 => {
+                let bolt11: S = iter.next().ok_or(Error::MissingBolt11)?;
+                Ok(Self::Bolt11(bolt11.as_ref().to_string()))
+            }
+            DESCRIPTION => {
+                let description: S = iter.next().ok_or(Error::MissingDescription)?;
+                Ok(Self::Description(description.as_ref().to_string()))
+            }
+            PREIMAGE => {
+                let preimage: S = iter.next().ok_or(Error::MissingPreimage)?;
+                Ok(Self::Preimage(preimage.as_ref().to_string()))
+            }
+            _ => Err(Error::UnknownTag),
+        }
+    }
+
+    fn to_tag(&self) -> Tag {
+        match self {
+            Self::Relays(relays) => {
+                let mut tag: Vec<String> = Vec::with_capacity(relays.len() + 1);
+                tag.push(String::from(RELAYS));
+                tag.extend(relays.iter().map(ToString::to_string));
+                Tag::new(tag)
+            }
+            Self::Amount { millisats, bolt11 } => {
+                let mut tag: Vec<String> = vec![String::from(AMOUNT), millisats.to_string()];
+                if let Some(bolt11) = bolt11 {
+                    tag.push(bolt11.clone());
+                }
+                Tag::new(tag)
+            }
+            Self::Lnurl(lnurl) => Tag::new(vec![String::from(LNURL), lnurl.clone()]),
+            Self::Anon { msg } => {
+                let mut tag: Vec<String> = vec![String::from(ANON)];
+                if let Some(msg) = msg {
+                    tag.push(msg.clone());
+                }
+                Tag::new(tag)
+            }
+            Self::Bolt11(bolt11) => Tag::new(vec![String::from(BOLT11), bolt11.clone()]),
+            Self::Description(description) => {
+                Tag::new(vec![String::from(DESCRIPTION), description.clone()])
+            }
+            Self::Preimage(preimage) => Tag::new(vec![String::from(PREIMAGE), preimage.clone()]),
+        }
+    }
+}
+
+impl_tag_codec_conversions!(Nip57Tag);
+
+fn parse_relays<T, S>(iter: T) -> Result<Vec<RelayUrl>, Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut relays: Vec<RelayUrl> = Vec::new();
+
+    for relay in iter {
+        relays.push(RelayUrl::parse(relay.as_ref())?);
+    }
+
+    Ok(relays)
+}
+
+fn parse_amount_tag<T, S>(mut iter: T) -> Result<Nip57Tag, Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    let millisats: S = iter.next().ok_or(Error::MissingAmount)?;
+    let millisats: u64 = millisats.as_ref().parse()?;
+    let bolt11: Option<String> = iter.next().map(|bolt11| bolt11.as_ref().to_string());
+
+    Ok(Nip57Tag::Amount { millisats, bolt11 })
 }
 
 impl From<bech32::EncodeError> for Error {
@@ -226,7 +394,7 @@ impl From<ZapRequestData> for Vec<Tag> {
         let mut tags: Vec<Tag> = vec![Tag::public_key(public_key)];
 
         if !relays.is_empty() {
-            tags.push(Tag::from_standardized(TagStandard::Relays(relays)));
+            tags.push(Nip57Tag::Relays(relays).into());
         }
 
         if let Some(event_id) = event_id {
@@ -238,14 +406,17 @@ impl From<ZapRequestData> for Vec<Tag> {
         }
 
         if let Some(amount) = amount {
-            tags.push(Tag::from_standardized(TagStandard::Amount {
-                millisats: amount,
-                bolt11: None,
-            }));
+            tags.push(
+                Nip57Tag::Amount {
+                    millisats: amount,
+                    bolt11: None,
+                }
+                .into(),
+            );
         }
 
         if let Some(lnurl) = lnurl {
-            tags.push(Tag::from_standardized(TagStandard::Lnurl(lnurl)));
+            tags.push(Nip57Tag::Lnurl(lnurl).into());
         }
 
         tags
@@ -258,7 +429,7 @@ pub fn anonymous_zap_request(data: ZapRequestData) -> Result<Event, Error> {
     let keys = Keys::generate();
     let message: String = data.message.clone();
     let mut tags: Vec<Tag> = data.into();
-    tags.push(Tag::from_standardized(TagStandard::Anon { msg: None }));
+    tags.push(Nip57Tag::Anon { msg: None }.into());
     Ok(EventBuilder::new(Kind::ZapRequest, message)
         .tags(tags)
         .sign_with_keys(&keys)?)
@@ -302,7 +473,7 @@ where
 
     // Compose event
     let mut tags: Vec<Tag> = data.into();
-    tags.push(Tag::from_standardized(TagStandard::Anon { msg: Some(msg) }));
+    tags.push(Nip57Tag::Anon { msg: Some(msg) }.into());
     let private_zap_keys: Keys = Keys::new_with_ctx(secp, secret_key);
     Ok(EventBuilder::new(Kind::ZapRequest, "")
         .tags(tags)
@@ -354,7 +525,7 @@ where
 
 fn extract_anon_tag_message(event: &Event) -> Result<String, Error> {
     for tag in event.tags.iter() {
-        if let Some(TagStandard::Anon { msg }) = tag.standardized() {
+        if let Ok(Nip57Tag::Anon { msg }) = Nip57Tag::try_from(tag) {
             return msg.ok_or(Error::InvalidPrivateZapMessage);
         }
     }
@@ -419,6 +590,59 @@ fn decrypt_private_zap_message(key: [u8; 32], private_zap_event: &Event) -> Resu
 #[cfg(all(feature = "std", feature = "os-rng"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_nip57_relays_tag() {
+        let tag = vec!["relays", "wss://relay.damus.io", "wss://relay.primal.net"];
+        let parsed = Nip57Tag::parse(tag).unwrap();
+
+        assert_eq!(
+            parsed,
+            Nip57Tag::Relays(vec![
+                RelayUrl::parse("wss://relay.damus.io").unwrap(),
+                RelayUrl::parse("wss://relay.primal.net").unwrap(),
+            ])
+        );
+        assert_eq!(
+            parsed.to_tag(),
+            Tag::parse(["relays", "wss://relay.damus.io", "wss://relay.primal.net"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_nip57_amount_tag() {
+        let tag = vec!["amount", "21000", "lnbc21u1p0test"];
+        let parsed = Nip57Tag::parse(tag).unwrap();
+
+        assert_eq!(
+            parsed,
+            Nip57Tag::Amount {
+                millisats: 21000,
+                bolt11: Some(String::from("lnbc21u1p0test")),
+            }
+        );
+        assert_eq!(
+            parsed.to_tag(),
+            Tag::parse(["amount", "21000", "lnbc21u1p0test"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_nip57_anon_tag() {
+        let tag = vec!["anon", "encrypted-message"];
+        let parsed = Nip57Tag::parse(tag).unwrap();
+
+        assert_eq!(
+            parsed,
+            Nip57Tag::Anon {
+                msg: Some(String::from("encrypted-message")),
+            }
+        );
+        assert_eq!(
+            parsed.to_tag(),
+            Tag::parse(["anon", "encrypted-message"]).unwrap()
+        );
+    }
 
     #[test]
     fn test_encrypt_decrypt_private_zap_message() {
