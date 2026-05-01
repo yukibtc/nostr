@@ -10,7 +10,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use super::nip01::Coordinate;
-use crate::event::tag::{Tag, TagCodec, TagStandard, impl_tag_codec_conversions};
+use super::nip30::Nip30Tag;
+use crate::event::tag::{Tag, TagCodec, impl_tag_codec_conversions};
 use crate::{EventId, PublicKey, Url, event, key};
 
 const WORD: &str = "word";
@@ -231,11 +232,14 @@ impl From<Emojis> for Vec<Tag> {
     fn from(Emojis { emojis, coordinate }: Emojis) -> Self {
         let mut tags = Vec::with_capacity(emojis.len() + coordinate.len());
 
-        tags.extend(
-            emojis
-                .into_iter()
-                .map(|(s, url)| Tag::from_standardized(TagStandard::Emoji { shortcode: s, url })),
-        );
+        tags.extend(emojis.into_iter().map(|(shortcode, image_url)| {
+            Nip30Tag::Emoji {
+                shortcode,
+                image_url,
+                emoji_set: None,
+            }
+            .to_tag()
+        }));
         tags.extend(coordinate.into_iter().map(Tag::from));
 
         tags
