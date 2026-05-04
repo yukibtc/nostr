@@ -7,11 +7,13 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/13.md>
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
+use core::fmt;
 use core::fmt::Debug;
-use core::num::NonZeroU8;
+use core::num::{NonZeroU8, ParseIntError};
 
 #[cfg(feature = "std")]
 mod blocking_wrapper;
@@ -23,7 +25,105 @@ mod single_thread;
 pub use self::multi_thread::*;
 pub use self::single_thread::*;
 use crate::UnsignedEvent;
+use crate::event::tag::{Tag, TagCodec, impl_tag_codec_conversions};
 use crate::util::BoxedFuture;
+
+const NONCE: &str = "nonce";
+
+/// NIP-13 error
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    /// Parse Int error
+    ParseInt(ParseIntError),
+    /// Missing difficulty
+    MissingDifficulty,
+    /// Missing nonce
+    MissingNonce,
+    /// Missing tag kind
+    MissingTagKind,
+    /// Unknown tag
+    UnknownTag,
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ParseInt(e) => fmt::Display::fmt(e, f),
+            Self::MissingDifficulty => f.write_str("Missing difficulty"),
+            Self::MissingNonce => f.write_str("Missing nonce"),
+            Self::MissingTagKind => f.write_str("Missing tag kind"),
+            Self::UnknownTag => f.write_str("Unknown tag"),
+        }
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(e: ParseIntError) -> Self {
+        Self::ParseInt(e)
+    }
+}
+
+/// Standardized NIP-13 tags
+///
+/// <https://github.com/nostr-protocol/nips/blob/master/13.md>
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Nip13Tag {
+    /// `nonce` tag
+    Nonce {
+        /// Nonce
+        nonce: u128,
+        /// Target difficulty
+        difficulty: u8,
+    },
+}
+
+impl TagCodec for Nip13Tag {
+    type Error = Error;
+
+    fn parse<I, S>(tag: I) -> Result<Self, Self::Error>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut iter = tag.into_iter();
+
+        let kind: S = iter.next().ok_or(Error::MissingTagKind)?;
+
+        match kind.as_ref() {
+            NONCE => {
+                let (nonce, difficulty) = parse_nonce_tag(iter)?;
+                Ok(Self::Nonce { nonce, difficulty })
+            }
+            _ => Err(Error::UnknownTag),
+        }
+    }
+
+    fn to_tag(&self) -> Tag {
+        match self {
+            Self::Nonce { nonce, difficulty } => Tag::new(vec![
+                String::from(NONCE),
+                nonce.to_string(),
+                difficulty.to_string(),
+            ]),
+        }
+    }
+}
+
+impl_tag_codec_conversions!(Nip13Tag);
+
+fn parse_nonce_tag<T, S>(mut iter: T) -> Result<(u128, u8), Error>
+where
+    T: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    let nonce: S = iter.next().ok_or(Error::MissingNonce)?;
+    let difficulty: S = iter.next().ok_or(Error::MissingDifficulty)?;
+
+    Ok((nonce.as_ref().parse()?, difficulty.as_ref().parse()?))
+}
 
 /// Gets the number of leading zero bits. Result is between 0 and 255.
 #[inline]
@@ -111,8 +211,30 @@ pub mod tests {
     use hashes::sha256::Hash as Sha256Hash;
 
     use super::*;
+    use crate::Tag;
     #[cfg(feature = "std")]
-    use crate::{EventBuilder, PublicKey, Tag, TagKind};
+    use crate::{EventBuilder, PublicKey, TagKind};
+
+    #[test]
+    fn test_parse_nonce_tag() {
+        let tag = vec!["nonce", "776797", "20"];
+        let parsed = Nip13Tag::parse(&tag).unwrap();
+        assert_eq!(
+            parsed,
+            Nip13Tag::Nonce {
+                nonce: 776797,
+                difficulty: 20
+            }
+        );
+        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+    }
+
+    #[test]
+    fn test_parse_nonce_tag_missing_difficulty() {
+        let tag = vec!["nonce", "776797"];
+        let err = Nip13Tag::parse(&tag).unwrap_err();
+        assert_eq!(err, Error::MissingDifficulty);
+    }
 
     #[test]
     fn check_get_leading_zeroes() {
